@@ -4,12 +4,19 @@ import Prelude
 
 import Control.Monad.Except (Except, runExcept, throwError)
 import Control.Monad.Reader (ReaderT, asks, local, runReaderT)
+import Control.Monad.State (StateT)
 import Data.Either (Either)
-import Data.Map (Map, empty, insert, lookup)
+import Data.Generic.Rep (class Generic)
+import Data.List (List(..))
+import Data.Map (Map, empty, fromFoldable, insert, lookup, toUnfoldable)
 import Data.Maybe (Maybe(..))
+import Data.Show.Generic (genericShow)
+import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Syntax.Common (Name)
 import Language.CP.Syntax.Core as C
+import Language.CP.Syntax.Source (intercalate')
 import Language.CP.Syntax.Source as S
+import Text.Parsing.Parser (ParseError, parseErrorMessage, parseErrorPosition)
 import Text.Parsing.Parser.Pos (Position)
 
 type Typing = ReaderT Ctx (Except TypeError)
@@ -24,13 +31,16 @@ type Ctx = { tmBindEnv  :: Map Name C.Ty -- typing
 data Pos = UnknownPos
          | Pos Position S.Tm Boolean
 
-runTyping :: forall a. Typing a -> Either TypeError a
-runTyping m = runExcept $ runReaderT m { tmBindEnv : empty
-                                       , tyBindEnv : empty
-                                       , tyAliasEnv : empty
-                                       , sortEnv : empty
-                                       , pos : UnknownPos
-                                       }
+emptyCtx :: Ctx
+emptyCtx =  { tmBindEnv : empty
+            , tyBindEnv : empty
+            , tyAliasEnv : empty
+            , sortEnv : empty
+            , pos : UnknownPos
+            }
+
+runTyping :: forall a. Typing a -> Ctx -> Either TypeError a
+runTyping m ctx = runExcept $ runReaderT m ctx
 
 lookupTmBind :: Name -> Typing C.Ty
 lookupTmBind name = do
@@ -79,3 +89,45 @@ instance Semigroup TypeError where
 
 throwTypeError :: forall a. String -> Typing a
 throwTypeError msg = TypeError msg <$> askPos >>= throwError
+
+type Checking = StateT CompilerState (Except TypeError)
+
+data Mode = SmallStep | StepTrace | BigStep | HOAS | Closure
+
+derive instance Generic Mode _
+instance Show Mode where show = genericShow
+
+type CompilerState =  { mode        :: Mode
+                      , timing      :: Boolean
+                      , tmBindings  :: List (Name /\ C.Ty /\ (C.Tm /\ C.Ty -> C.Tm))
+                      , tyAliases   :: Map Name S.Ty
+                      }
+
+initState :: CompilerState
+initState = { mode       : BigStep
+            , timing     : false
+            , tmBindings : Nil
+            , tyAliases  : empty
+            }
+
+toList :: forall k v. Map k v -> List (k /\ v)
+toList = toUnfoldable
+
+ppState :: CompilerState -> String
+ppState st = intercalate' "\n" (map ppTmBinding st.tmBindings) <>
+  intercalate' "\n" (map ppTyAlias $ toList st.tyAliases)
+  where
+    ppTmBinding (x /\ t /\ _) = "term " <> x <> " : " <> show t
+    ppTyAlias (x /\ t) = "type " <> x <> " = " <> show t
+
+fromState :: CompilerState -> Ctx
+fromState b = { tmBindEnv : fromFoldable $ map (\(x /\ t /\ _) -> x /\ t) b.tmBindings
+              , tyAliasEnv : b.tyAliases
+              , tyBindEnv : empty
+              , sortEnv : empty
+              , pos : UnknownPos
+              }
+
+throwParseError :: forall a. ParseError -> Checking a
+throwParseError err = let pos = Pos (parseErrorPosition err) S.TmUnit false in
+  throwError $ TypeError (parseErrorMessage err) pos

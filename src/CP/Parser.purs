@@ -15,7 +15,7 @@ import Data.String (codePointFromChar)
 import Data.String.CodeUnits as SCU
 import Data.Tuple (Tuple(..))
 import Language.CP.Syntax.Common (ArithOp(..), BinOp(..), CompOp(..), LogicOp(..), UnOp(..))
-import Language.CP.Syntax.Source (Bias(..), MethodPattern(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
+import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
 import Language.CP.Util (foldl1, isCapitalized)
 import Text.Parsing.Parser (Parser, fail, position)
 import Text.Parsing.Parser.Combinators (between, choice, endBy, lookAhead, manyTill, option, sepEndBy, sepEndBy1, try)
@@ -28,11 +28,19 @@ type SParser a = Parser String a
 
 -- Program --
 
-program :: SParser Tm
-program = fix $ \p -> tyDef p <|> tmDef p <|> expr
+program :: SParser Prog
+program = do
+  defs <- many def
+  optExpr <- optional expr
+  pure $ Prog defs $ case optExpr of
+    Just e -> e
+    Nothing -> TmUnit
 
-tyDef :: SParser Tm -> SParser Tm
-tyDef p = do
+def :: SParser Def
+def = tyDef <|> tmDef
+
+tyDef :: SParser Def
+tyDef = do
   isRec <- reserved "type" $> false <|> reserved "typerec" $> true
   a <- upperIdentifier
   sorts <- many (angles upperIdentifier)
@@ -40,22 +48,20 @@ tyDef p = do
   symbol "="
   t <- ty
   symbol ";"
-  e <- p
-  pure $ TmType isRec a sorts parms t e
+  pure $ TyDef isRec a sorts parms t
 
-tmDef :: SParser Tm -> SParser Tm
-tmDef p = do
-  def <- try do
+tmDef :: SParser Def
+tmDef = do
+  d <- try do
     x <- lowerIdentifier
     tys <- many $ try $ tyParams false
     tms <- many tmParams
     t <- optional (symbol ":" *> ty)
     symbol "="
     pure $ TmDef x tys tms t
-  e1 <- expr
+  e <- expr
   symbol ";"
-  e2 <- p
-  pure $ def e1 e2
+  pure $ d e
 
 -- Expressions --
 

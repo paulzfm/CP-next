@@ -97,8 +97,6 @@ data Tm = TmInt Int
         | TmArray (Array Tm)
         | TmDoc Tm
         | TmPos Position Tm
-        | TmType Boolean Name (List Name) (List Name) Ty Tm
-        | TmDef Name TyParamList TmParamList (Maybe Ty) Tm Tm
 
 data Bias = Neutral | Leftist | Rightist
 derive instance Eq Bias
@@ -158,16 +156,6 @@ instance Show Tm where
   show (TmArray arr) = brackets $ intercalate "; " (show <$> arr)
   show (TmDoc e) = show e
   show (TmPos _pos e) = show e
-  -- `type A<T> extends B<T> = ...` can be rewritten as `type A<T> = B<T> & ...`
-  -- because sort argument expansion from B<T> to B<T, #T> already prevents
-  -- distinguishing output occurrences of T in B any more.
-  show (TmType isRec a sorts params t e) =
-    (if isRec then "typerec" else "type") <+> a <+>
-    intercalate' " " (angles <$> sorts) <> intercalate' " " params <>
-    "=" <+> show t <> ";" <+> show e
-  show (TmDef x tyParams tmParams t e1 e2) = x <+>
-    showTyParams tyParams <> showTmParams tmParams <>
-    showMaybe ": " t " " <> "=" <+> show e1 <> ";" <+> show e2
 
 showDoc :: Tm -> String
 showDoc (TmDoc e) = "`" <> showDoc e <> "`"
@@ -181,6 +169,28 @@ showDoc (TmApp (TmVar "Str") (TmToString s)) = "\\(" <> show s <> ")"
 showDoc (TmApp (TmVar x) e) = "\\" <> x <> showDoc e
 showDoc (TmApp e1 e2) = showDoc e1 <> showDoc e2
 showDoc e = "(" <> show e <> ")"
+
+-- Definitions --
+data Def = TyDef Boolean Name (List Name) (List Name) Ty
+         | TmDef Name TyParamList TmParamList (Maybe Ty) Tm
+
+instance Show Def where
+  -- `type A<T> extends B<T> = ...` can be rewritten as `type A<T> = B<T> & ...`
+  -- because sort argument expansion from B<T> to B<T, #T> already prevents
+  -- distinguishing output occurrences of T in B any more.
+  show (TyDef isRec a sorts params t) =
+    (if isRec then "typerec" else "type") <+> a <+>
+    intercalate' " " (angles <$> sorts) <> intercalate' " " params <>
+    "=" <+> show t <> ";"
+  show (TmDef x tyParams tmParams t e) = x <+>
+    showTyParams tyParams <> showTmParams tmParams <>
+    showMaybe ": " t " " <> "=" <+> show e <> ";"
+
+-- Program --
+data Prog = Prog (List Def) Tm
+
+instance Show Prog where
+  show (Prog defs e) = intercalate' "\n" (map show defs) <> "\n" <> show e
 
 -- Substitution --
 

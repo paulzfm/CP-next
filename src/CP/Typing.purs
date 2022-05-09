@@ -3,21 +3,25 @@ module Language.CP.Typing where
 import Prelude
 
 import Control.Alt ((<|>))
+import Control.Monad.Error.Class (throwError)
+import Control.Monad.State (gets, modify_)
 import Data.Array (all, elem, head, notElem, null, unzip)
 import Data.Either (Either(..))
-import Data.Foldable (foldr)
+import Data.Foldable (foldr, traverse_)
 import Data.List (List(..), filter, last, singleton, sort, (:))
+import Data.Map (insert)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.Traversable (for, traverse)
 import Data.Tuple (fst, uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
-import Language.CP.Context (Pos(..), Typing, addSort, addTmBind, addTyAlias, addTyBind, localPos, lookupTmBind, lookupTyBind, throwTypeError)
+import Language.CP.Context (Checking, Pos(..), TypeError(..), Typing, addSort, addTmBind, addTyBind, fromState, localPos, lookupTmBind, lookupTyBind, runTyping, throwTypeError)
 import Language.CP.Desugar (deMP, desugar)
 import Language.CP.Subtyping (isTopLike, (<:), (===))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core as C
+import Language.CP.Syntax.Source (Def(..), Prog(..))
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (transform, transform', transformTyDef)
 import Language.CP.TypeDiff (tyDiff)
@@ -184,14 +188,9 @@ infer (S.TmLet x Nil Nil e1 e2) = do
   e2' /\ t2 <- addTmBind x t1 $ infer e2
   pure $ letIn x e1' t1 e2' t2 /\ t2
 infer (S.TmLetrec x Nil Nil t e1 e2) = do
-  t' <- transform t
-  e1' /\ t1 <- addTmBind x t' $ infer e1
-  if t1 <: t' then do
-    let e1'' = if t1 === t' then e1' else C.TmAnno e1' t'
-    e2' /\ t2 <- addTmBind x t' $ infer e2
-    pure $ letIn x (C.TmFix x e1'' t') t' e2' t2 /\ t2
-  else throwTypeError $
-    "annotated" <+> show t <+> "is not a supertype of inferred" <+> show t1
+  e1' /\ t' <- inferRec x e1 t
+  e2' /\ t2 <- addTmBind x t' $ infer e2
+  pure $ letIn x (C.TmFix x e1' t') t' e2' t2 /\ t2
 -- TODO: find a more efficient algorithm
 infer (S.TmOpen e1 e2) = do
   e1' /\ t1 <- infer e1
@@ -452,23 +451,15 @@ infer (S.TmDoc doc) = localPos f $ infer doc
 infer (S.TmPos p e) = localPos f $ infer e
   where f (Pos _ _ inDoc) = Pos p e inDoc
         f UnknownPos = Pos p e false
-infer (S.TmType isRec a sorts params t e) = do
-  t' <- addRec $ addSorts $ addTyBinds $ transformTyDef t
-  addTyAlias a (rec (sig t')) $ infer e
-  where
-    dualSorts :: List (Name /\ Name)
-    dualSorts = sorts <#> \sort -> sort /\ ("#" <> sort)
-    addSorts :: forall a. Typing a -> Typing a
-    addSorts typing = foldr (uncurry addSort) typing dualSorts
-    addTyBinds :: forall a. Typing a -> Typing a
-    addTyBinds typing = foldr (flip addTyBind C.TyTop) typing params
-    sig :: S.Ty -> S.Ty
-    sig t' = foldr (uncurry S.TySig) (foldr S.TyAbs t' params) dualSorts
-    addRec :: forall a. Typing a -> Typing a
-    addRec = if isRec then addTyBind a C.TyTop else identity
-    rec :: S.Ty -> S.Ty
-    rec = if isRec then S.TyRec a else identity
 infer e = throwTypeError $ "expected a desugared term, but got" <+> show e
+
+inferRec :: Name -> S.Tm -> S.Ty -> Typing (C.Tm /\ C.Ty)
+inferRec x e t = do
+  t' <- transform t
+  e' /\ t1 <- addTmBind x t' $ infer e
+  if t1 <: t' then pure $ (if t1 === t' then e' else C.TmAnno e' t') /\ t'
+  else throwTypeError $
+    "annotated" <+> show t <+> "is not a supertype of inferred" <+> show t1
 
 distApp :: C.Ty -> Either C.Ty C.Ty -> Typing C.Ty
 distApp (C.TyArrow targ tret _) (Left t) | t <: targ = pure tret
@@ -542,3 +533,46 @@ selectLabel (C.TyAnd t1 t2) l opt =
     Nothing,  Nothing  -> Nothing
 selectLabel (C.TyRcd l' t opt') l opt | l == l' && opt == opt' = Just t
 selectLabel _ _ _ = Nothing
+
+checkDef :: Def -> Checking Unit
+checkDef (TyDef isRec a sorts params t) = do
+  ctx <- gets fromState
+  case runTyping (addRec $ addSorts $ addTyBinds $ transformTyDef t) ctx of
+    Left err -> throwError err
+    Right t' -> modify_ (\b -> b { tyAliases = insert a (rec (sig t')) b.tyAliases })
+  where
+    dualSorts :: List (Name /\ Name)
+    dualSorts = sorts <#> \sort -> sort /\ ("#" <> sort)
+    addSorts :: forall a. Typing a -> Typing a
+    addSorts typing = foldr (uncurry addSort) typing dualSorts
+    addTyBinds :: forall a. Typing a -> Typing a
+    addTyBinds typing = foldr (flip addTyBind C.TyTop) typing params
+    sig :: S.Ty -> S.Ty
+    sig t' = foldr (uncurry S.TySig) (foldr S.TyAbs t' params) dualSorts
+    addRec :: forall a. Typing a -> Typing a
+    addRec = if isRec then addTyBind a C.TyTop else identity
+    rec :: S.Ty -> S.Ty
+    rec = if isRec then S.TyRec a else identity
+checkDef (TmDef x Nil Nil Nothing e) = do
+  ctx <- gets fromState
+  case runTyping (infer e) ctx of
+    Left err -> throwError err
+    Right (e' /\ t) ->
+      let f = letIn x e' t in
+      modify_ (\st -> st { tmBindings = st.tmBindings <> singleton (x /\ t /\ uncurry f) })
+checkDef (TmDef x Nil Nil (Just t) e) = do
+  ctx <- gets fromState
+  case runTyping (inferRec x e t) ctx of
+    Left err -> throwError err
+    Right (e' /\ t') -> 
+      let f = letIn x (C.TmFix x e' t') t' in
+      modify_ (\b -> b { tmBindings = b.tmBindings <> ((x /\ t' /\ uncurry f) : Nil) })
+checkDef d = throwError $ TypeError ("expected a desugared def, but got" <+> show d) UnknownPos
+
+checkProg :: Prog -> Checking (C.Tm /\ C.Ty)
+checkProg (Prog defs e) = do
+  traverse_ checkDef defs
+  ctx <- gets fromState
+  case runTyping (infer e) ctx of
+    Left err -> throwError err
+    Right p -> pure p
