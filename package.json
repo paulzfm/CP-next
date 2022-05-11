@@ -6,6 +6,7 @@
   "scripts": {
     "start": "spago run",
     "test": "spago test",
+    "repl": "spago repl",
     "vscode": "cd vscode && vsce package",
     "lezer": "lezer-generator --noTerms --output lezer lezer.grammar",
     "antlr": "antlr -visitor -no-listener antlr/*.g4",
