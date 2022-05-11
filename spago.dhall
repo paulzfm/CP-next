@@ -14,7 +14,6 @@
   , "free"
   , "identity"
   , "lists"
-  , "math"
   , "maybe"
   , "newtype"
   , "node-buffer"
@@ -23,17 +22,18 @@
   , "node-path"
   , "node-readline"
   , "now"
+  , "numbers"
   , "ordered-collections"
   , "parsing"
   , "partial"
   , "prelude"
+  , "refs"
   , "spec"
   , "strings"
+  , "stringutils"
   , "transformers"
   , "tuples"
   , "unicode"
-  , "stringutils"
-  , "refs"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs" ]

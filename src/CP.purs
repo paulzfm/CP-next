@@ -23,9 +23,8 @@ import Language.CP.Semantics.Subst as SmallStep
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (Prog(..), Tm, showDoc)
 import Language.CP.Typing (checkProg, infer)
-import Text.Parsing.Parser (ParseError(..), runParser)
-import Text.Parsing.Parser.Pos (Position(..))
-import Text.Parsing.Parser.String (eof)
+import Parsing (ParseError(..), runParser, Position(..))
+import Parsing.String (eof)
 
 inferType :: String -> Typing String
 inferType code = case runParser code (whiteSpace *> expr <* eof) of

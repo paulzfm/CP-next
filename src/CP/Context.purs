@@ -16,7 +16,7 @@ import Language.CP.Syntax.Common (Name)
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (intercalate')
 import Language.CP.Syntax.Source as S
-import Text.Parsing.Parser.Pos (Position)
+import Parsing (Position)
 
 type Typing = ReaderT Ctx (Except TypeError)
 
