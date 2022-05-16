@@ -15,7 +15,7 @@ import Data.String (codePointFromChar)
 import Data.String.CodeUnits as SCU
 import Data.Tuple (Tuple(..))
 import Language.CP.Syntax.Common (ArithOp(..), BinOp(..), CompOp(..), LogicOp(..), UnOp(..))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
+import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam, RcdTyList)
 import Language.CP.Util (foldl1, isCapitalized)
 import Parsing (Parser, fail, position)
 import Parsing.Combinators (between, choice, endBy, lookAhead, manyTill, option, sepEndBy, sepEndBy1, try)
@@ -37,7 +37,7 @@ program = do
     Nothing -> TmUnit
 
 def :: SParser Def
-def = tyDef <|> tmDef
+def = tyDef <|> itDef <|> tmDef
 
 tyDef :: SParser Def
 tyDef = do
@@ -49,6 +49,14 @@ tyDef = do
   t <- ty
   symbol ";"
   pure $ TyDef isRec a sorts parms t
+
+itDef :: SParser Def
+itDef = do
+  reserved "interface"
+  x <- upperIdentifier
+  t <- rcdTyList
+  symbol ";"
+  pure $ ItDef x t
 
 tmDef :: SParser Def
 tmDef = do
@@ -348,7 +356,7 @@ aty t = choice [ reserved "Int"    $> TyInt
                , reserved "Bot"    $> TyBot
                , upperIdentifier <#> TyVar
                , brackets t <#> TyArray
-               , recordTy
+               , TyRcd <$> rcdTyList
                , parens t
                ]
 
@@ -374,8 +382,8 @@ traitTy = do
     to <- ty
     pure $ TyTrait ti to
 
-recordTy :: SParser Ty
-recordTy = braces $ TyRcd <$> sepEndBySemi do
+rcdTyList :: SParser RcdTyList
+rcdTyList = braces $ sepEndBySemi do
   l <- identifier
   opt <- isJust <$> optional (symbol "?")
   symbol ":"

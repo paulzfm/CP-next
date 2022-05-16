@@ -21,7 +21,7 @@ import Language.CP.Desugar (deMP, desugar)
 import Language.CP.Subtyping (isTopLike, (<:), (===))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core as C
-import Language.CP.Syntax.Source (Def(..), Prog(..))
+import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..))
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (transform, transform', transformTyDef)
 import Language.CP.TypeDiff (tyDiff)
@@ -553,6 +553,11 @@ checkDef (TyDef isRec a sorts params t) = do
     addRec = if isRec then addTyBind a C.TyTop else identity
     rec :: S.Ty -> S.Ty
     rec = if isRec then S.TyRec a else identity
+checkDef (ItDef a rs) = do
+  ctx <- gets fromState
+  case runTyping (transformTyDef $ TyRcd rs) ctx of
+    Left err -> throwError err
+    Right t' -> modify_ (\b -> b { tyAliases = insert a (S.TyNominal a t') b.tyAliases })
 checkDef (TmDef x Nil Nil Nothing e) = do
   ctx <- gets fromState
   case runTyping (infer e) ctx of

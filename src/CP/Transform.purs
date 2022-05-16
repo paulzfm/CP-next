@@ -53,6 +53,7 @@ translate (S.TyTrait Nothing to) = translate to >>= \to' -> pure $ C.TyArrow to'
 translate (S.TyTrait (Just ti) to) =
   C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
+translate (S.TyNominal _ t) = translate t
 translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t
