@@ -34,7 +34,7 @@ data Ty = TyInt
         | TySig Name Name Ty
         | TyArray Ty
         | TyDiff Ty Ty
-        | TyNominal Name Ty
+        | TyNominal Name (Maybe Ty) Ty
 
 instance Show Ty where
   show TyInt    = "Int"
@@ -58,7 +58,7 @@ instance Show Ty where
     parens $ "\\" <> angles (a <> "," <+> b) <+> "->" <+> show t
   show (TyArray t) = brackets $ show t
   show (TyDiff t1 t2) = parens $ show t1 <+> "\\" <+> show t2
-  show (TyNominal a _) = "'" <> a <> "'"
+  show (TyNominal a _ _) = "'" <> a <> "'"
 
 derive instance Eq Ty
 

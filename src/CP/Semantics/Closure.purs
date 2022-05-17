@@ -13,7 +13,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple.Nested ((/\))
 import Language.CP.Semantics.Common (Arg(..), binop, genTopLike, toString, unop)
-import Language.CP.Subtyping (isTopLike, split, (<:))
+import Language.CP.Subtype.Core (isTopLike, split, (<:))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core (EvalBind(..), EvalEnv, Tm(..), Ty(..), unfold)
 import Language.CP.Util (unsafeFromJust)

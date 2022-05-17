@@ -18,7 +18,7 @@ import Data.Tuple (fst, uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Context (Checking, Pos(..), TypeError(..), Typing, addSort, addTmBind, addTyBind, fromState, localPos, lookupTmBind, lookupTyBind, runTyping, throwTypeError)
 import Language.CP.Desugar (deMP, desugar)
-import Language.CP.Subtyping (isTopLike, (<:), (===))
+import Language.CP.Subtype.Core (isTopLike, (<:), (===))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..))
@@ -557,7 +557,7 @@ checkDef (ItDef a rs) = do
   ctx <- gets fromState
   case runTyping (transformTyDef $ TyRcd rs) ctx of
     Left err -> throwError err
-    Right t' -> modify_ (\b -> b { tyAliases = insert a (S.TyNominal a t') b.tyAliases })
+    Right t' -> modify_ (\b -> b { tyAliases = insert a (S.TyNominal a Nothing t') b.tyAliases })
 checkDef (TmDef x Nil Nil Nothing e) = do
   ctx <- gets fromState
   case runTyping (infer e) ctx of

@@ -53,7 +53,7 @@ translate (S.TyTrait Nothing to) = translate to >>= \to' -> pure $ C.TyArrow to'
 translate (S.TyTrait (Just ti) to) =
   C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
-translate (S.TyNominal _ t) = translate t
+translate (S.TyNominal _ _ t) = translate t
 translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t
@@ -111,6 +111,7 @@ expand (S.TySort ti to) = do
       _ -> pure $ S.TySort ti' (Just ti')
 expand (S.TyArray t) = S.TyArray <$> expand t
 expand (S.TyDiff t1 t2) = S.TyDiff <$> expand t1 <*> expand t2
+expand (S.TyNominal a s t) = S.TyNominal a <$> traverse expand s <*> expand t
 expand t = pure t
 
 -- If a type declaration is parametrized with sorts,
