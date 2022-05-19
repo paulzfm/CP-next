@@ -23,7 +23,7 @@ data Ty = TyInt
         | TyBool
         | TyTop
         | TyBot
-        | TyArrow Ty Ty Boolean
+        | TyArrow Ty Ty Boolean -- bool flag: if tranformed from a trait type
         | TyAnd Ty Ty
         | TyRcd Label Ty Boolean
         | TyVar Name

@@ -7,7 +7,7 @@ import Data.Either (Either(..), either)
 import Data.List (List(..), foldr, singleton)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Tuple.Nested ((/\))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), Tm(..), TmParam(..), Ty(..))
+import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), Tm(..), TmParam(..), Ty(..), TyParamList, TmParamList)
 import Language.CP.Util (foldl1)
 
 -- typing-related desugaring is delayed until type inference
@@ -35,10 +35,7 @@ desugar (TmLet x tyParams tmParams e1 e2) =
   TmLet x Nil Nil (desugar (TmTAbs tyParams (TmAbs tmParams e1))) (desugar e2)
 desugar (TmLetrec x tyParams tmParams t e1 e2) =
   TmLetrec x Nil Nil t' (desugar (TmTAbs tyParams (TmAbs tmParams e1))) (desugar e2)
-  where t' = TyForall tyParams (foldr TyArrow t (tyOf <$> tmParams))
-        tyOf = case _ of TmParam _ (Just ty) -> ty
-                         TmParam _ Nothing -> TyBot
-                         WildCard _ -> TyBot
+  where t' = funTypeOf tyParams tmParams t
 
 desugar (TmUnary op e) = TmUnary op (desugar e)
 desugar (TmBinary op e1 e2) = TmBinary op (desugar e1) (desugar e2)
@@ -73,11 +70,19 @@ desugarDef (TmDef x tyParams tmParams Nothing e) = TmDef x Nil Nil Nothing $
   desugar (TmTAbs tyParams (TmAbs tmParams e))
 desugarDef (TmDef x tyParams tmParams (Just t) e) = TmDef x Nil Nil (Just t') $
   desugar (TmTAbs tyParams (TmAbs tmParams e))
-  where t' = TyForall tyParams (foldr TyArrow t (tyOf <$> tmParams))
-        tyOf = case _ of TmParam _ (Just ty) -> ty
-                         TmParam _ Nothing -> TyBot
-                         WildCard _ -> TyBot
+  where t' = funTypeOf tyParams tmParams t
 desugarDef d = d
 
 desugarProg :: Prog -> Prog
 desugarProg (Prog defs e) = Prog (map desugarDef defs) (desugar e)
+
+-- helper
+funTypeOf :: TyParamList -> TmParamList -> Ty -> Ty
+funTypeOf tyParams tmParams t = foldr (\(x /\ mt) -> \acc -> TyForall x (get mt) acc)
+  (foldr TyArrow t (tyOf <$> tmParams)) tyParams
+  where
+    get = case _ of Just x -> x
+                    Nothing -> TyTop
+    tyOf = case _ of TmParam _ (Just ty) -> ty
+                     TmParam _ Nothing -> TyBot
+                     WildCard _ -> TyBot

@@ -3,12 +3,15 @@ module Language.CP.TypeDiff where
 import Prelude
 
 import Control.Alt ((<|>))
+import Data.List (List(..), zip, (:))
 import Data.Maybe (Maybe(..))
-import Data.Tuple.Nested ((/\))
+import Data.Traversable (traverse)
+import Data.Tuple (uncurry)
 import Language.CP.Context (Typing, lookupTyBind, throwTypeError)
-import Language.CP.Subtype.Core (isTopLike, split)
+import Language.CP.Subtype.Source (isTopLike, split)
 import Language.CP.Syntax.Common (Name)
-import Language.CP.Syntax.Core (Ty(..), tySubst)
+import Language.CP.Syntax.Source (RcdTy(..), Ty(..), intercalate', tySubst)
+import Language.CP.Util (foldl1)
 import Partial.Unsafe (unsafeCrashWith)
 
 tyDiff :: Ty -> Ty -> Typing Ty
@@ -17,22 +20,21 @@ tyDiff m s = simplify <$> diff m s
     -- this algorithm does not depend on separate definitions of subtyping or disjointness
     diff :: Ty -> Ty -> Typing Ty
     diff t1 t2 | isTopLike t1 || isTopLike t2 = pure t1
-    diff t1 t2 | Just (t3 /\ t4) <- split t1 =
-      tyMerge t1 <$> diff t3 t2 <*> diff t4 t2
+    diff t1 t2 | Just ts <- split t1 = tyMerge t1 <$> traverse (_ `diff` t2) ts
     diff t (TyAnd t1 t2) = (diff t t1 >>= \t' -> diff t' t2) <|>
                            (diff t t2 >>= \t' -> diff t' t1)
     diff TyBot TyBot = pure TyTop
     diff t TyBot = diff t t        -- should not precede left-split
     diff TyBot _ = throwDiffError  -- should not precede right-and
-    diff t@(TyArrow targ1 tret1 b) (TyArrow targ2 tret2 _) = do
+    diff t@(TyArrow targ1 tret1) (TyArrow targ2 tret2) = do
       dret <- diff tret1 tret2
       if dret == tret1 then pure t  -- disjoint (m * s)
       else do darg <- diff targ2 targ1
               if isTopLike darg  -- supertype (m :> s)
-              then pure $ TyArrow targ1 dret b else throwDiffError
-    diff t@(TyRcd l1 t1 b) (TyRcd l2 t2 _)
-      | l1 == l2  = TyRcd l1 <$> diff t1 t2 <@> b
-      | otherwise = pure t
+              then pure $ TyArrow targ1 dret else throwDiffError
+    diff (TyRcd rts1) (TyRcd rts2) = TyRcd <$> traverse (uncurry f) (zip rts1 rts2)
+      where f t@(RcdTy l1 t1 b) (RcdTy l2 t2 _) | l1 == l2  = RcdTy l1 <$> diff t1 t2 <@> b
+                                                | otherwise = pure t
     diff t@(TyForall a1 td1 t1) (TyForall a2 td2 t2) = do
       d <- diff t1 t2'
       if d == t1 then pure t  -- disjoint (m * s)
@@ -54,23 +56,26 @@ tyDiff m s = simplify <$> diff m s
     disjointVar :: Name -> Ty -> Typing Boolean
     disjointVar a t = lookupTyBind a >>= case _ of
       Just td -> isTopLike <$> diff t td
-      Nothing -> pure false
+      _ -> pure false
     throwDiffError :: Typing Ty
     throwDiffError = throwTypeError $ "cannot subtract " <> show s <> " from " <> show m
 
-tyMerge :: Ty -> Ty -> Ty -> Ty
-tyMerge (TyAnd _ _) t1 t2 = TyAnd t1 t2
-tyMerge (TyArrow targ tret b) (TyArrow targ1 t1 b1) (TyArrow targ2 t2 b2)
-  | targ == targ1 && targ == targ2 && b == b1 && b == b2
-  = TyArrow targ (tyMerge tret t1 t2) b
-tyMerge (TyRcd l t b) (TyRcd l1 t1 b1) (TyRcd l2 t2 b2)
-  | l == l1 && l == l2 && b == b1 && b == b2
-  = TyRcd l (tyMerge t t1 t2) b
-tyMerge (TyForall a td t) (TyForall a1 td1 t1) (TyForall a2 td2 t2)
-  | a == a1 && a == a2 && td == td1 && td == td2
-  = TyForall a td (tyMerge t t1 t2)
-tyMerge t t1 t2 = unsafeCrashWith $ "CP.TypeDiff.tyMerge: " <>
-  "cannot merge " <> show t1 <> " and " <> show t2 <> " according to " <> show t
+tyMerge :: Ty -> List Ty -> Ty
+tyMerge (TyAnd _ _) ts = foldl1 TyAnd ts
+tyMerge t@(TyArrow targ tret) ts = TyArrow targ (tyMerge tret (f <$> ts))
+  where f (TyArrow t1 t2) | t1 == targ = t2
+        f _ = tyMergeCrash t ts
+tyMerge t@(TyRcd (RcdTy l tl b : Nil)) ts = TyRcd (RcdTy l (tyMerge tl (f <$> ts)) b : Nil)
+  where f (TyRcd (RcdTy l' t' b' : Nil)) | l' == l && b' == b = t'
+        f _ = tyMergeCrash t ts
+tyMerge t@(TyForall x s t1) ts = TyForall x s (tyMerge t1 (f <$> ts))
+  where f (TyForall y s' t') | y == x && s' == s = t'
+        f _ = tyMergeCrash t ts
+tyMerge t ts = tyMergeCrash t ts
+
+tyMergeCrash :: Ty -> List Ty -> Ty
+tyMergeCrash t ts = unsafeCrashWith $ "CP.TypeDiff.tyMerge: " <>
+    "cannot merge " <> intercalate' ", " (map show ts) <> " according to " <> show t
 
 simplify :: Ty -> Ty
 simplify t | isTopLike t = TyTop
@@ -79,9 +84,9 @@ simplify t@(TyAnd t1 t2) = case isTopLike t1, isTopLike t2 of
   true,  false -> t2
   false, true  -> t1
   false, false -> t
-simplify (TyArrow targ tret b) = TyArrow targ (simplify tret) b
-simplify (TyRcd l t b) = TyRcd l (simplify t) b
-simplify (TyForall a td t) = TyForall a td (simplify t)
+simplify (TyArrow targ tret) = TyArrow targ (simplify tret)
+simplify (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (simplify t) b) <$> rts
+simplify (TyForall x s t) = TyForall x s (simplify t)
 simplify (TyRec a t) = TyRec a (simplify t)
 simplify (TyArray t) = TyArray (simplify t)
 simplify t = t

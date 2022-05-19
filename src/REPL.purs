@@ -22,14 +22,15 @@ import Effect.Console (log)
 import Effect.Exception (message, try)
 import Effect.Now (nowTime)
 import Effect.Ref (Ref, modify_, new, read, write)
-import Language.CP (importDefs, inferType, interpret, showTypeError)
+import Language.CP (importDefs, inferType, interpret, judgeSubtype, showTypeError)
 import Language.CP.Context (CompilerState, Mode(..), fromState, initState, ppState, runTyping)
 import Language.CP.Util (unsafeFromJust)
 import Node.Encoding (Encoding(..))
 import Node.FS.Stats (isDirectory)
 import Node.FS.Sync as Sync
 import Node.Path (FilePath, concat, sep)
-import Node.ReadLine (Completer, Interface, createConsoleInterface, noCompletion, prompt, setLineHandler, setPrompt)
+import Node.ReadLine (Completer, Interface, createConsoleInterface, noCompletion, prompt,
+                      setLineHandler, setPrompt)
 
 -- commands
 type Cmd = String -> Ref CompilerState -> Effect Unit
@@ -43,6 +44,7 @@ printHelp _ _ = log $ stripMargin
   |  :set timing
   |  :show env
   |  :type <expr>
+  |  :subtype <type> <: <type>
   |  :load <file>
   |  :import <file>
   """
@@ -76,6 +78,13 @@ typeExpr :: Cmd
 typeExpr expr ref = do
   st <- read ref
   case runTyping (inferType expr) (fromState st) of
+    Left err -> fatal $ showTypeError err
+    Right output -> log output
+
+checkSubtype :: Cmd
+checkSubtype judgment ref = do
+  st <- read ref
+  case runTyping (judgeSubtype judgment) (fromState st) of
     Left err -> fatal $ showTypeError err
     Right output -> log output
 
@@ -124,6 +133,7 @@ dispatch input = ifMatchesAny (":?" : ":help" : Nil) printHelp $
   ifMatches ":set timing" setTiming $
   ifMatches ":show env" showEnv $
   ifMatches ":type" (mayTime typeExpr) $
+  ifMatches ":subtype" (mayTime checkSubtype) $
   ifMatches ":load" (mayTime loadFile) $
   ifMatches ":import" (mayTime importFile) $
   ifMatches ":" errorCmd $
@@ -167,7 +177,8 @@ getCompleter (FileSyntax s) input = let target = s <> " " in
         if isDirectory stat then do
           files <- Sync.readdir dir
           let candidates = filter (startsWith base) files
-          pure { completions : map (\f -> cmd <> concat [dir, f]) candidates, matched : cmd <> path }
+          pure { completions : (\f -> cmd <> concat [dir, f]) <$> candidates,
+                 matched : cmd <> path }
         else noCompletion ""
       else noCompletion ""
 
@@ -195,6 +206,7 @@ completer = makeCompleter $ unsafeFromJust $ fromArray
   , ConstSyntax ":set mode HOAS", ConstSyntax ":set mode Closure"
   , ConstSyntax ":set timing"
   , ConstSyntax ":type"
+  , ConstSyntax ":subtype"
   , FileSyntax ":load"
   , FileSyntax ":import" ]
 

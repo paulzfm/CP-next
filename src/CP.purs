@@ -5,23 +5,22 @@ import Prelude
 import Control.Monad.State (gets)
 import Data.Array ((!!))
 import Data.Either (Either(..))
-import Data.List (foldr)
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), split)
-import Data.Tuple (fst)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
 import Effect.Exception (throw)
-import Language.CP.Context (Checking, CompilerState, Mode(..), Pos(..), TypeError(..), Typing, emptyCtx, runTyping, throwCheckError, throwTypeError)
+import Language.CP.Context (Checking, Mode(..), Pos(..), TypeError(..), Typing, emptyCtx, fromState, letTrans, runTyping, throwCheckError, throwTypeError)
 import Language.CP.Desugar (desugar, desugarProg)
-import Language.CP.Parser (expr, program, whiteSpace)
+import Language.CP.Parser (expr, program, subtypeJudgment, whiteSpace)
 import Language.CP.Semantics.HOAS as HOAS
 import Language.CP.Semantics.NaturalClosure as Closure
 import Language.CP.Semantics.NaturalSubst as BigStep
 import Language.CP.Semantics.StepTrace as StepTrace
 import Language.CP.Semantics.Subst as SmallStep
-import Language.CP.Syntax.Core as C
+import Language.CP.Subtype.Source (showSubtypeTrace)
 import Language.CP.Syntax.Source (Prog(..), Tm, showDoc)
+import Language.CP.Transform (expand)
 import Language.CP.Typing (checkProg, infer)
 import Parsing (ParseError(..), runParser, Position(..))
 import Parsing.String (eof)
@@ -32,6 +31,14 @@ inferType code = case runParser code (whiteSpace *> expr <* eof) of
   Right e -> do
     _ /\ t <- infer $ desugar e
     pure $ show t
+
+judgeSubtype :: String -> Typing String
+judgeSubtype judgment = case runParser judgment (whiteSpace *> subtypeJudgment <* eof) of
+  Left err -> throwTypeError $ showParseError err judgment
+  Right (t1 /\ t2) -> do
+    t1' <- expand t1
+    t2' <- expand t2
+    pure $ showSubtypeTrace t1' t2'
 
 importDefs :: String -> Checking Unit
 importDefs code = case runParser code (whiteSpace *> program <* eof) of
@@ -48,19 +55,19 @@ interpret code = case runParser code (whiteSpace *> program <* eof) of
     let prog' = desugarProg prog
     let e' = case prog' of Prog _ e -> e
     e /\ t <- checkProg prog'
-    e'' <- gets (wrapUp e t)
-    mode <- gets (_.mode)
-    pure $ case mode of
-      SmallStep -> show (SmallStep.eval e'')
-      StepTrace -> let _ /\ s = StepTrace.eval e'' in
-        show e <> "\n⇣ Desugar\n" <> show e' <> "\n↯ Elaborate\n" <> s ""
-      BigStep -> show (BigStep.eval e'')
-      HOAS -> show (HOAS.eval e'')
-      Closure -> show (Closure.eval e'')
-  where
-    wrapUp :: C.Tm -> C.Ty -> CompilerState -> C.Tm
-    wrapUp e t st = fst $ foldr (\f -> \acc -> f acc) (e /\ t) $
-      map (\(_ /\ _ /\ f) -> \(e1 /\ t1) -> (f (e1 /\ t1) /\ t1)) st.tmBindings
+    f <- gets letTrans
+    ctx <- gets fromState
+    case runTyping (f $ pure $ e /\ t) ctx of
+      Left err -> throwCheckError $ showTypeError err
+      Right (e'' /\ _) -> do
+        mode <- gets (_.mode)
+        pure $ case mode of
+          SmallStep -> show (SmallStep.eval e'')
+          StepTrace -> let _ /\ s = StepTrace.eval e'' in
+            show e <> "\n⇣ Desugar\n" <> show e' <> "\n↯ Elaborate\n" <> s ""
+          BigStep -> show (BigStep.eval e'')
+          HOAS -> show (HOAS.eval e'')
+          Closure -> show (Closure.eval e'')
 
 showPosition :: Position -> String
 showPosition (Position { line: line, column: column }) =

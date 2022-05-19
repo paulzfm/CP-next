@@ -10,12 +10,13 @@ import Data.Either (Either(..))
 import Data.Identity (Identity)
 import Data.List (List, foldl, many, null, some, toUnfoldable)
 import Data.List.NonEmpty (toList)
-import Data.Maybe (Maybe(..), isJust, isNothing, optional)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, optional)
 import Data.String (codePointFromChar)
 import Data.String.CodeUnits as SCU
 import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Syntax.Common (ArithOp(..), BinOp(..), CompOp(..), LogicOp(..), UnOp(..))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam, RcdTyList)
+import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), RcdTyList, SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
 import Language.CP.Util (foldl1, isCapitalized)
 import Parsing (Parser, fail, position)
 import Parsing.Combinators (between, choice, endBy, lookAhead, manyTill, option, sepEndBy, sepEndBy1, try)
@@ -369,18 +370,19 @@ sortTy t = angles do
 forallTy :: SParser Ty
 forallTy = do
   reserved "forall"
-  xs <- some (tyParams true)
+  x <- identifier
+  s <- (symbol "*" *> ty) <|> pure TyTop
   symbol "."
   t <- ty
-  pure $ TyForall xs t
+  pure $ TyForall x s t
 
 traitTy :: SParser Ty
 traitTy = do
   reserved "Trait"
   angles do
-    ti <- optional (try (ty <* symbol "=>"))
+    mt <- optional (try (ty <* symbol "=>"))
     to <- ty
-    pure $ TyTrait ti to
+    pure $ TyTrait (fromMaybe to mt) to
 
 rcdTyList :: SParser RcdTyList
 rcdTyList = braces $ sepEndBySemi do
@@ -395,6 +397,13 @@ toperators = [ [ Infix (reservedOp "&"  $> TyAnd) AssocLeft  ]
              , [ Infix (reservedOp "\\" $> TyDiff) AssocLeft ]
              , [ Infix (reservedOp "->" $> TyArrow) AssocRight ]
              ]
+
+subtypeJudgment :: SParser (Ty /\ Ty)
+subtypeJudgment = do
+  t1 <- ty
+  symbol ":<:"
+  t2 <- ty
+  pure $ t1 /\ t2
 
 -- Helpers --
 

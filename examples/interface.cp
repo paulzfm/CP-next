@@ -7,4 +7,4 @@ b = new trait implements B => { foo = 2 };
 getFoo (x : { foo : Int }) = x.foo;
 getFooA (x : A) = x.foo;
 getFoo a + getFoo b + getFooA a
--- getFooA b -- error
+-- + getFooA b -- error

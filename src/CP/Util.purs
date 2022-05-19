@@ -3,9 +3,10 @@ module Language.CP.Util where
 import Prelude
 
 import Data.CodePoint.Unicode (isUpper)
-import Data.List (List(..), foldl, (:))
+import Data.List (List(..), foldl, length, zip, (..), (:))
 import Data.Maybe (Maybe(..))
 import Data.String (codePointAt)
+import Data.Tuple.Nested (type (/\))
 import Partial.Unsafe (unsafeCrashWith)
 
 beside :: String -> String -> String
@@ -28,3 +29,6 @@ unsafeFromJust (Just x) = x
 
 isCapitalized :: String -> Boolean
 isCapitalized = isUpper <<< unsafeFromJust <<< codePointAt 0
+
+zipWithIndex :: forall a. List a -> List (a /\ Int)
+zipWithIndex xs = zip xs $ 0 .. (length xs - 1)
