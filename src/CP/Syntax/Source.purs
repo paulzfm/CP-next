@@ -56,7 +56,7 @@ instance Show Ty where
     parens $ "\\" <> angles (a <> "," <+> b) <+> "->" <+> show t
   show (TyArray t) = brackets $ show t
   show (TyDiff t1 t2) = parens $ show t1 <+> "\\" <+> show t2
-  show (TyNominal a _ _) = "'" <> a <> "'"
+  show (TyNominal a _ _) = "interface" <+> a
 
 derive instance Eq Ty
 

@@ -25,7 +25,7 @@ import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..), intercalate')
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (expand, transform, transform', transformTyDef)
-import Language.CP.TypeDiff (tyDiff)
+import Language.CP.TypeDiff (structuralize, tyDiff)
 import Language.CP.Util (foldr1, unsafeFromJust, (<+>))
 import Partial.Unsafe (unsafeCrashWith)
 
@@ -232,7 +232,7 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
   t' <- expand t
   sig' <- expand sig
   let e2 = inferFromSig sig' ne2
-  ret /\ tret <- case me1 of
+  (ret /\ tret) /\ tExtended <- case me1 of
     Just e1 -> do
       -- self may be used in e1 (e.g. trait [self:T] inherits f self => ...)
       -- this self has nothing to do with that self in the super-trait
@@ -246,16 +246,18 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
             disjoint to' t2
             let tret = S.TyAnd to' t2
             to'' <- transform to'
-            letIn "super" (C.TmApp e1' (C.TmVar self) true) to $ pure $
-              (C.TmMerge (C.TmAnno (C.TmVar "super") to'') e2') /\ tret
+            (_ /\ S.TyAnd sig' to') <$> letIn "super" (C.TmApp e1' (C.TmVar self) true) to
+              (pure $ (C.TmMerge (C.TmAnno (C.TmVar "super") to'') e2') /\ tret)
           else throwTypeError $ "self-type" <+> show t <+>
             "is not a subtype of inherited self-type" <+> show ti
         _ -> throwTypeError $ "expected to inherit a trait, but got" <+> show t1
-    Nothing -> addTmBind self t' $ infer e2
-  case tret `impl` sig' of -- TODO: is this choice really correct?
-    Just tret' -> trait self ret t' tret'
-    Nothing -> throwTypeError $ "the trait does not implement" <+> show sig <+>
-      "because the following subtyping does not hold:\n" <> showSubtypeTrace tret sig'
+    Nothing -> (_ /\ sig') <$> (addTmBind self t' $ infer e2)
+  if tret <: sig' then trait self ret t' tret
+  else if structuralize tret <: structuralize sig' then do
+    tDelta <- tyDiff (structuralize tret) (structuralize tExtended)
+    trait self ret t' $ if tDelta == S.TyTop then tExtended else S.TyAnd tExtended tDelta
+  else throwTypeError $ "the trait does not implement" <+> show sig <+>
+    "because the following subtyping does not hold:\n" <> showSubtypeTrace tret sig'
   where
     -- TODO: inference is not complete
     inferFromSig :: S.Ty -> S.Tm -> S.Tm
@@ -356,9 +358,6 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
       where labels = fst <$> def
             labels' = foldr (\(S.RcdTy l _ opt) s -> if opt then l : s else s)
                             Nil (combineRcd ty)
-    impl :: S.Ty -> S.Ty -> Maybe S.Ty
-    impl t1 t@(S.TyNominal _ _ t2) = if t1 <: t2 then Just t else Nothing
-    impl t1 t2 = if t1 <: t2 then Just t1 else Nothing
 infer (S.TmTrait (Just (self /\ Nothing)) sig e1 e2) =
   infer $ S.TmTrait (Just (self /\ Just S.TyTop)) sig e1 e2
 infer (S.TmNew e) = do

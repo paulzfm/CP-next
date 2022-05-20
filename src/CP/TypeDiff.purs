@@ -90,3 +90,19 @@ simplify (TyForall x s t) = TyForall x s (simplify t)
 simplify (TyRec a t) = TyRec a (simplify t)
 simplify (TyArray t) = TyArray (simplify t)
 simplify t = t
+
+structuralize :: Ty -> Ty
+structuralize (TyArrow t1 t2) = TyArrow (structuralize t1) (structuralize t2)
+structuralize (TyAnd t1 t2) = TyAnd (structuralize t1) (structuralize t2)
+structuralize (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (structuralize t) b) <$> rts
+structuralize (TyForall a td t) = TyForall a (structuralize td) (structuralize t)
+structuralize (TyRec x t) = TyRec x (structuralize t)
+structuralize (TyApp t1 t2) = TyApp (structuralize t1) (structuralize t2)
+structuralize (TyAbs x t) = TyAbs x (structuralize t)
+structuralize (TyTrait t1 t2) = TyTrait (structuralize t1) (structuralize t2)
+structuralize (TySort t1 t2) = TySort (structuralize t1) (structuralize <$> t2)
+structuralize (TySig x y t) = TySig x y (structuralize t)
+structuralize (TyArray t) = TyArray (structuralize t)
+structuralize (TyDiff t1 t2) = TyDiff (structuralize t1) (structuralize t2)
+structuralize (TyNominal _ _ t) = structuralize t
+structuralize t = t
