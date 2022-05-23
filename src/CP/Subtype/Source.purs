@@ -4,15 +4,18 @@ import Prelude
 
 import Control.Alt ((<|>))
 import Data.Array ((!!))
-import Data.Foldable (foldl)
+import Data.Foldable (foldl, foldr)
 import Data.List (List(..), all, length, singleton, zip, (:))
 import Data.Maybe (Maybe(..), isNothing)
 import Data.String.Utils (repeat)
+import Data.Traversable (traverse)
 import Data.Tuple (uncurry)
 import Data.Tuple.Nested ((/\))
-import Language.CP.Syntax.Common (Label)
-import Language.CP.Syntax.Source (RcdTy(..), Ty(..), intercalate', tySubst)
+import Language.CP.Context (Typing, lookupTyBind, throwTypeError)
+import Language.CP.Syntax.Common (Label, Name)
+import Language.CP.Syntax.Source (RcdTy(..), Ty(..), TyConstr(..), intercalate', tySubst)
 import Language.CP.Util (foldl1, unsafeFromJust, zipWithIndex, (<+>))
+import Partial.Unsafe (unsafeCrashWith)
 
 data STree = SLeaf Ty Ty
            | SNode Ty Ty STree
@@ -23,6 +26,7 @@ data STree = SLeaf Ty Ty
 subtype :: Ty -> Ty -> Maybe STree
 subtype TyBot _ = Nothing
 subtype _ t | isTopLike t = Nothing
+subtype t1 t2 | t1 == t2  = Nothing
 subtype t1 t2 | Just ts <- split t2 = SNode t1 t2 <$>
   foldl1 (<|>) ((t1 `subtype` _) <$> ts)
 subtype t1@(TyArrow targ1 tret1) t2@(TyArrow targ2 tret2) = SNode t1 t2 <$>
@@ -43,13 +47,16 @@ subtype t1@(TyRec a1 t1') t2@(TyRec a2 t2') = SNode t1 t2 <$>
 subtype t1@(TyArray t1') t2@(TyArray t2') = SNode t1 t2 <$> t1' `subtype` t2'
 subtype t1@(TyTrait ti1 to1) t2@(TyTrait ti2 to2) = SNode t1 t2 <$>
   TyArrow ti1 to1 `subtype` TyArrow ti2 to2
-subtype t1 t2@(TyNominal a _ _) = SNode t1 t2 <$> canCast t1
-  where canCast (TyNominal x _ _) | x == a = Nothing
-        canCast (TyNominal _ (Just s) _) = canCast s
-        canCast t = Just $ SLeaf t t2
-subtype t1@(TyNominal _ _ t1') t2 = SNode t1 t2 <$> t1' `subtype` t2
-subtype t1 t2 | t1 == t2  = Nothing
-              | otherwise = Just $ SLeaf t1 t2
+subtype t1@(TyNominal _ _) t2@(TyNominal _ _) = SOr t1 t2 <$>
+  foldl f (Just Nil) ((_ `subtype` t2) <$> directSupers t1)
+  where f (Just trees) (Just tree) = Just $ trees <> singleton tree
+        f _ _ = Nothing
+subtype t1@(TyNominal _ _) t2 = SNode t1 t2 <$> structuralize t1 `subtype` t2
+subtype t1 t2 = Just $ SLeaf t1 t2
+
+directSupers :: Ty -> List Ty
+directSupers (TyNominal (TyConstr _ ss _) as) = (\t -> foldr (uncurry tySubst) t as) <$> ss
+directSupers _ = Nil
 
 showSubtypeTrace :: Ty -> Ty -> String
 showSubtypeTrace t1 t2 = case t1 `subtype` t2 of
@@ -60,6 +67,7 @@ showSubtypeTrace t1 t2 = case t1 `subtype` t2 of
     pp k prefix t = unsafeFromJust (repeat k " ") <> prefix <> case t of
       SLeaf tl tr -> show tl <+> "<:" <+> show tr <+> "✗"
       SNode tl tr tree -> show tl <+> "<:" <+> show tr <> "\n" <> pp k "⇐ " tree
+      SOr tl tr Nil -> show tl <+> "<:" <+> show tr <+> "✗"
       SOr tl tr (tree : Nil) -> show tl <+> "<:" <+> show tr <> "\n" <> pp k "⇐ " tree
       SOr tl tr trees -> show tl <+> "<:" <+> show tr <> "\n" <> intercalate' "\n"
         ((\(tree /\ i) -> pp (k + 2) ("⇐" <> superscript i <> " ") tree) <$> zipWithIndex trees)
@@ -70,28 +78,6 @@ showSubtypeTrace t1 t2 = case t1 `subtype` t2 of
 
 isSubType :: Ty -> Ty -> Boolean
 isSubType t1 t2 = isNothing $ t1 `subtype` t2
--- subtype TyBot _ = true
--- subtype _ t | isTopLike t = true
--- subtype t1 t2 | Just ts <- split t2 = all (t1 <: _) ts
--- subtype (TyArrow targ1 tret1) (TyArrow targ2 tret2) = targ2 <: targ1 && tret1 <: tret2
--- subtype t1 t2 | Just ts <- split t1 = any (_ <: t2) ts
--- subtype _ (TyRcd (RcdTy _ _ true : Nil)) = true
--- subtype (TyRcd (RcdTy l1 t1 false : Nil)) (TyRcd (RcdTy l2 t2 false : Nil)) = l1 == l2 && t1 <: t2
--- subtype (TyForall a1 td1 t1) (TyForall a2 td2 t2) = td2 <: td1 && t1 <: tySubst a2 (TyVar a1) t2
--- subtype (TyRec a1 t1) (TyRec a2 t2) =
---   tySubst a1 (tyRcd a1 t1 false) t1 <: tySubst a2 (tyRcd a1 t2' false) t2
---   where t2' = tySubst a2 (TyVar a1) t2
--- subtype (TyArray t1) (TyArray t2) = t1 <: t2
--- subtype (TyTrait (Just ti1) to1) (TyTrait (Just ti2) to2) = TyArrow ti1 to1 <: TyArrow ti2 to2
--- subtype t (TyNominal a _ _) = canCast t
---   where
---     canCast :: Ty -> Boolean
---     canCast (TyNominal x _ _) | x == a = true
---     canCast (TyNominal _ (Just s) _) = canCast s
---     canCast _ = false
--- subtype (TyNominal _ _ t1) t2 = t1 <: t2
--- subtype t1 t2 | t1 == t2  = true
---               | otherwise = false
 
 infix 4 isSubType as <:
 
@@ -143,3 +129,97 @@ aeq t1 t2 | t1 == t2  = true
           | otherwise = false
 
 infix 4 aeq as ===
+
+tyDiff :: Ty -> Ty -> Typing Ty
+tyDiff m s = simplify <$> diff m s
+  where
+    -- this algorithm does not depend on separate definitions of subtyping or disjointness
+    diff :: Ty -> Ty -> Typing Ty
+    diff t1 t2 | isTopLike t1 || isTopLike t2 = pure t1
+    diff t1 t2 | Just ts <- split t1 = tyMerge t1 <$> traverse (_ `diff` t2) ts
+    diff t (TyAnd t1 t2) = (diff t t1 >>= \t' -> diff t' t2) <|>
+                           (diff t t2 >>= \t' -> diff t' t1)
+    diff TyBot TyBot = pure TyTop
+    diff t TyBot = diff t t        -- should not precede left-split
+    diff TyBot _ = throwDiffError  -- should not precede right-and
+    diff t@(TyArrow targ1 tret1) (TyArrow targ2 tret2) = do
+      dret <- diff tret1 tret2
+      if dret == tret1 then pure t  -- disjoint (m * s)
+      else do darg <- diff targ2 targ1
+              if isTopLike darg  -- supertype (m :> s)
+              then pure $ TyArrow targ1 dret else throwDiffError
+    diff (TyRcd rts1) (TyRcd rts2) = TyRcd <$> traverse (uncurry f) (zip rts1 rts2)
+      where f t@(RcdTy l1 t1 b) (RcdTy l2 t2 _) | l1 == l2  = RcdTy l1 <$> diff t1 t2 <@> b
+                                                | otherwise = pure t
+    diff t@(TyForall a1 td1 t1) (TyForall a2 td2 t2) = do
+      d <- diff t1 t2'
+      if d == t1 then pure t  -- disjoint (m * s)
+      else do dd <- diff td2 td1
+              if isTopLike dd  -- supertype (m :> s)
+              then pure $ TyForall a1 td1 d else throwDiffError
+      where t2' = tySubst a2 (TyVar a1) t2
+    diff (TyVar a1) (TyVar a2) | a1 == a2 = pure TyTop
+    diff (TyVar a) t = disjointVar a t >>=
+      if _ then pure $ TyVar a else throwDiffError
+    diff t (TyVar a) = disjointVar a t >>=
+      if _ then pure t else throwDiffError
+    diff (TyArray t1) (TyArray t2) = TyArray <$> diff t1 t2
+    -- TODO: recursive type difference
+    diff (TyRec _ _) _ = throwDiffError
+    diff _ (TyRec _ _) = throwDiffError
+    diff t1 t2 | t1 == t2  = pure TyTop
+               | otherwise = pure t1
+    disjointVar :: Name -> Ty -> Typing Boolean
+    disjointVar a t = lookupTyBind a >>= case _ of
+      Just td -> isTopLike <$> diff t td
+      _ -> pure false
+    throwDiffError :: Typing Ty
+    throwDiffError = throwTypeError $ "cannot subtract " <> show s <> " from " <> show m
+
+tyMerge :: Ty -> List Ty -> Ty
+tyMerge (TyAnd _ _) ts = foldl1 TyAnd ts
+tyMerge t@(TyArrow targ tret) ts = TyArrow targ (tyMerge tret (f <$> ts))
+  where f (TyArrow t1 t2) | t1 == targ = t2
+        f _ = tyMergeCrash t ts
+tyMerge t@(TyRcd (RcdTy l tl b : Nil)) ts = TyRcd (RcdTy l (tyMerge tl (f <$> ts)) b : Nil)
+  where f (TyRcd (RcdTy l' t' b' : Nil)) | l' == l && b' == b = t'
+        f _ = tyMergeCrash t ts
+tyMerge t@(TyForall x s t1) ts = TyForall x s (tyMerge t1 (f <$> ts))
+  where f (TyForall y s' t') | y == x && s' == s = t'
+        f _ = tyMergeCrash t ts
+tyMerge t ts = tyMergeCrash t ts
+
+tyMergeCrash :: Ty -> List Ty -> Ty
+tyMergeCrash t ts = unsafeCrashWith $ "CP.TypeDiff.tyMerge: " <>
+    "cannot merge " <> intercalate' ", " (map show ts) <> " according to " <> show t
+
+simplify :: Ty -> Ty
+simplify t | isTopLike t = TyTop
+simplify t@(TyAnd t1 t2) = case isTopLike t1, isTopLike t2 of
+  true,  true  -> TyTop
+  true,  false -> t2
+  false, true  -> t1
+  false, false -> t
+simplify (TyArrow targ tret) = TyArrow targ (simplify tret)
+simplify (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (simplify t) b) <$> rts
+simplify (TyForall x s t) = TyForall x s (simplify t)
+simplify (TyRec a t) = TyRec a (simplify t)
+simplify (TyArray t) = TyArray (simplify t)
+simplify t = t
+
+structuralize :: Ty -> Ty
+structuralize (TyArrow t1 t2) = TyArrow (structuralize t1) (structuralize t2)
+structuralize (TyAnd t1 t2) = TyAnd (structuralize t1) (structuralize t2)
+structuralize (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (structuralize t) b) <$> rts
+structuralize (TyForall a td t) = TyForall a (structuralize td) (structuralize t)
+structuralize (TyRec x t) = TyRec x (structuralize t)
+structuralize (TyApp t1 t2) = TyApp (structuralize t1) (structuralize t2)
+structuralize (TyAbs x t) = TyAbs x (structuralize t)
+structuralize (TyTrait t1 t2) = TyTrait (structuralize t1) (structuralize t2)
+structuralize (TySort t1 t2) = TySort (structuralize t1) (structuralize <$> t2)
+structuralize (TySig x y t) = TySig x y (structuralize t)
+structuralize (TyArray t) = TyArray (structuralize t)
+structuralize (TyDiff t1 t2) = TyDiff (structuralize t1) (structuralize t2)
+structuralize t@(TyNominal (TyConstr _ _ rcd) as) = foldl TyAnd (foldr (uncurry tySubst) rcd as) $
+  structuralize <$> directSupers t
+structuralize t = t

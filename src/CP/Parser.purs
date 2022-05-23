@@ -8,7 +8,7 @@ import Data.Array as Array
 import Data.CodePoint.Unicode (isLower)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
-import Data.List (List, foldl, many, null, some, toUnfoldable)
+import Data.List (List(..), foldl, many, null, some, toUnfoldable)
 import Data.List.NonEmpty (toList)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, optional)
 import Data.String (codePointFromChar)
@@ -55,9 +55,12 @@ itDef :: SParser Def
 itDef = do
   reserved "interface"
   x <- upperIdentifier
-  t <- rcdTyList
+  params <- many upperIdentifier
+  supers <- reserved "extends" *> (toList <$> sepEndBy1 ty (symbol ",")) <* symbol "=>"
+        <|> optional (symbol "=>") $> Nil
+  rcd <- rcdTyList
   symbol ";"
-  pure $ ItDef x t
+  pure $ ItDef x params supers rcd
 
 tmDef :: SParser Def
 tmDef = do
@@ -448,6 +451,7 @@ langDef = LanguageDef (unGenLanguageDef haskellStyle) { reservedNames =
   , "trait", "implements", "inherits", "override", "new", "fold", "unfold"
   , "let", "letrec", "open", "in", "with", "type", "typerec", "forall"
   , "Int", "Double", "String", "Bool", "Top", "Bot", "Trait"
+  , "interface", "extends"
   ]
 }
 

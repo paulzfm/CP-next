@@ -19,14 +19,13 @@ import Data.Tuple (fst, uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Context (Checking, LetTrans, Pos(..), TypeError(..), Typing, addSort, addTmBind, addTyBind, fromState, localPos, lookupTmBind, lookupTyBind, runTyping, throwTypeError, toList)
 import Language.CP.Desugar (deMP, desugar)
-import Language.CP.Subtype.Source (isTopLike, showSubtypeTrace, tyRcd, (<:), (===))
+import Language.CP.Subtype.Source (isTopLike, showSubtypeTrace, structuralize, tyDiff, tyRcd, (<:), (===))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..), intercalate')
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (expand, transform, transform', transformTyDef)
-import Language.CP.TypeDiff (structuralize, tyDiff)
-import Language.CP.Util (foldr1, unsafeFromJust, (<+>))
+import Language.CP.Util (foldl1, foldr1, unsafeFromJust, (<+>))
 import Partial.Unsafe (unsafeCrashWith)
 
 infer :: S.Tm -> Typing (C.Tm /\ S.Ty)
@@ -553,7 +552,7 @@ collectLabels :: S.Ty -> Set Label
 collectLabels (S.TyAnd t1 t2) = Set.union (collectLabels t1) (collectLabels t2)
 collectLabels (S.TyRcd rts) = Set.fromFoldable $ (\(S.RcdTy l _ _) -> l) <$>
   filter (\(S.RcdTy _ _ opt) -> not opt) rts
-collectLabels (S.TyNominal _ _ t) = collectLabels t
+collectLabels t@(S.TyNominal _ _) = collectLabels (structuralize t)
 collectLabels _ = Set.empty
 
 selectLabel :: S.Ty -> Label -> Boolean -> Maybe S.Ty
@@ -565,7 +564,7 @@ selectLabel (S.TyAnd t1 t2) l opt =
     Nothing,  Nothing  -> Nothing
 selectLabel (S.TyRcd rts) l opt = (\(S.RcdTy _ t _) -> t) <$>
   find (\(S.RcdTy l' _ opt') -> l' == l && opt' == opt) rts
-selectLabel (S.TyNominal _ _ t) l opt = selectLabel t l opt
+selectLabel t@(S.TyNominal _ _) l opt = selectLabel (structuralize t) l opt
 selectLabel _ _ _ = Nothing
 
 checkDef :: Def -> Checking Unit
@@ -587,11 +586,30 @@ checkDef (TyDef isRec a sorts params t) = do
     addRec = if isRec then addTyBind a S.TyTop else identity
     rec :: S.Ty -> S.Ty
     rec = if isRec then S.TyRec a else identity
-checkDef (ItDef a rs) = do
+checkDef (ItDef a params supers fs) = do
   ctx <- gets fromState
-  case runTyping (transformTyDef $ TyRcd rs) ctx of
+  case runTyping resolver ctx of
     Left err -> throwError err
-    Right t' -> modify_ (\b -> b { tyAliases = insert a (S.TyNominal a Nothing t') b.tyAliases })
+    Right t -> modify_ (\b -> b { tyAliases = insert a t b.tyAliases })
+  where
+    resolver :: Typing Ty
+    resolver = do
+      let params' = (\x -> x /\ S.TyTop) <$> params
+      supers' <- addTyBinds params' $ traverse checkSuper supers
+      rcd <- addTyBinds params' $ expand $ S.TyRcd fs
+      if supers' == Nil then pure unit else
+        addTyBinds params' $ disjoint (structuralize $ foldl1 S.TyAnd supers') rcd
+      let constr = S.TyConstr a supers' rcd
+      let nominal = S.TyNominal constr $ (\x -> x /\ S.TyVar x) <$> params
+      pure $ foldr S.TyAbs nominal (fst <$> params')
+    addTyBinds :: forall a. List (Name /\ Ty) -> Typing a -> Typing a
+    addTyBinds binds typing = foldr (uncurry addTyBind) typing binds
+    checkSuper :: Ty -> Typing Ty
+    checkSuper t = do
+      t' <- expand t
+      case t' of
+        TyNominal _ _ -> pure t'
+        _ -> throwTypeError $ "expected interface type, but got" <+> show t'
 checkDef (TmDef x Nil Nil Nothing e) = do
   ctx <- gets fromState
   case runTyping (infer e) ctx of

@@ -4,14 +4,15 @@ import Prelude
 
 import Control.Alt ((<|>))
 import Control.Monad.Reader (asks)
+import Data.Bitraversable (rtraverse)
 import Data.List (List(..))
 import Data.Maybe (Maybe(..))
 import Data.Traversable (for, traverse)
 import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Context (Typing, addTyBind, lookupSort, lookupTyAlias, lookupTyBind, ppTypeVars, throwTypeError)
+import Language.CP.Subtype.Source (structuralize, tyDiff)
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source as S
-import Language.CP.TypeDiff (tyDiff)
 import Language.CP.Util (foldl1, isCapitalized, (<+>))
 
 transform :: S.Ty -> Typing C.Ty
@@ -44,7 +45,7 @@ translate (S.TyVar a) = pure $ C.TyVar a
 translate (S.TyRec a t) = C.TyRec a <$> translate t
 translate (S.TyTrait ti to) = C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
-translate (S.TyNominal _ _ t) = translate t
+translate t@(S.TyNominal _ _) = translate (structuralize t)
 translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t
@@ -103,7 +104,7 @@ expand (S.TySort ti to) = do
       _ -> pure $ S.TySort ti' (Just ti')
 expand (S.TyArray t) = S.TyArray <$> expand t
 expand (S.TyDiff t1 t2) = S.TyDiff <$> expand t1 <*> expand t2
-expand (S.TyNominal a s t) = S.TyNominal a <$> traverse expand s <*> expand t
+expand (S.TyNominal c args) = S.TyNominal c <$> traverse (rtraverse expand) args
 expand t = pure t
 
 -- If a type declaration is parametrized with sorts,
