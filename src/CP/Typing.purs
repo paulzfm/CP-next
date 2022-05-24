@@ -231,7 +231,7 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
   t' <- expand t
   sig' <- expand sig
   let e2 = inferFromSig sig' ne2
-  (ret /\ tret) /\ tExtended <- case me1 of
+  (ret /\ tret) <- case me1 of
     Just e1 -> do
       -- self may be used in e1 (e.g. trait [self:T] inherits f self => ...)
       -- this self has nothing to do with that self in the super-trait
@@ -245,16 +245,16 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
             disjoint to' t2
             let tret = S.TyAnd to' t2
             to'' <- transform to'
-            (_ /\ S.TyAnd sig' to') <$> letIn "super" (C.TmApp e1' (C.TmVar self) true) to
-              (pure $ (C.TmMerge (C.TmAnno (C.TmVar "super") to'') e2') /\ tret)
+            letIn "super" (C.TmApp e1' (C.TmVar self) true) to $ pure $
+              (C.TmMerge (C.TmAnno (C.TmVar "super") to'') e2') /\ tret
           else throwTypeError $ "self-type" <+> show t <+>
             "is not a subtype of inherited self-type" <+> show ti
         _ -> throwTypeError $ "expected to inherit a trait, but got" <+> show t1
-    Nothing -> (_ /\ sig') <$> (addTmBind self t' $ infer e2)
+    Nothing -> addTmBind self t' $ infer e2
   if tret <: sig' then trait self ret t' tret
   else if structuralize tret <: structuralize sig' then do
-    tDelta <- tyDiff (structuralize tret) (structuralize tExtended)
-    trait self ret t' $ if tDelta == S.TyTop then tExtended else S.TyAnd tExtended tDelta
+    tDelta <- tyDiff (structuralize tret) (structuralize sig')
+    trait self ret t' $ if tDelta == S.TyTop then sig' else S.TyAnd sig' tDelta
   else throwTypeError $ "the trait does not implement" <+> show sig <+>
     "because the following subtyping does not hold:\n" <> showSubtypeTrace tret sig'
   where

@@ -10,7 +10,6 @@ getFooA (x : A) = x.foo;
 
 interface C { foo : Int; bar : Int; baz : String };
 c = new trait implements C inherits aTrait => { baz = "baz" };
--- TODO: inferred type seems redundant
 
 a.bar + getFoo a + getFoo b + getFooA a
 -- + getFooA b -- error

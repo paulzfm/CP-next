@@ -4,7 +4,7 @@ import Prelude
 
 import Control.Alt ((<|>))
 import Data.Array ((!!))
-import Data.Foldable (foldl, foldr)
+import Data.Foldable (find, foldl, foldr)
 import Data.List (List(..), all, length, singleton, zip, (:))
 import Data.Maybe (Maybe(..), isNothing)
 import Data.String.Utils (repeat)
@@ -148,9 +148,11 @@ tyDiff m s = simplify <$> diff m s
       else do darg <- diff targ2 targ1
               if isTopLike darg  -- supertype (m :> s)
               then pure $ TyArrow targ1 dret else throwDiffError
-    diff (TyRcd rts1) (TyRcd rts2) = TyRcd <$> traverse (uncurry f) (zip rts1 rts2)
-      where f t@(RcdTy l1 t1 b) (RcdTy l2 t2 _) | l1 == l2  = RcdTy l1 <$> diff t1 t2 <@> b
-                                                | otherwise = pure t
+    diff (TyRcd rts1) (TyRcd rts2) = TyRcd <$> traverse exclude rts1
+      where 
+        exclude r@(RcdTy l t opt) = case find (\(RcdTy l' _ _) -> l' == l) rts2 of
+          Just (RcdTy _ t' _) -> RcdTy l <$> diff t t' <@> opt
+          Nothing -> pure r
     diff t@(TyForall a1 td1 t1) (TyForall a2 td2 t2) = do
       d <- diff t1 t2'
       if d == t1 then pure t  -- disjoint (m * s)
