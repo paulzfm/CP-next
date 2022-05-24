@@ -199,8 +199,8 @@ simplify :: Ty -> Ty
 simplify t | isTopLike t = TyTop
 simplify t@(TyAnd t1 t2) = case isTopLike t1, isTopLike t2 of
   true,  true  -> TyTop
-  true,  false -> t2
-  false, true  -> t1
+  true,  false -> simplify t2
+  false, true  -> simplify t1
   false, false -> t
 simplify (TyArrow targ tret) = TyArrow targ (simplify tret)
 simplify (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (simplify t) b) <$> rts
