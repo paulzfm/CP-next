@@ -4,7 +4,7 @@ import Prelude
 
 import Control.Alt ((<|>))
 import Data.Array ((!!))
-import Data.Foldable (find, foldl, foldr)
+import Data.Foldable (any, find, foldl, foldr, intercalate)
 import Data.List (List(..), all, length, singleton, zip, (:))
 import Data.Maybe (Maybe(..), isNothing)
 import Data.String.Utils (repeat)
@@ -136,6 +136,7 @@ tyDiff m s = simplify <$> diff m s
     -- this algorithm does not depend on separate definitions of subtyping or disjointness
     diff :: Ty -> Ty -> Typing Ty
     diff t1 t2 | isTopLike t1 || isTopLike t2 = pure t1
+    diff t1 t2 | t1 == t2 = pure TyTop
     diff t1 t2 | Just ts <- split t1 = tyMerge t1 <$> traverse (_ `diff` t2) ts
     diff t (TyAnd t1 t2) = (diff t t1 >>= \t' -> diff t' t2) <|>
                            (diff t t2 >>= \t' -> diff t' t1)
@@ -169,8 +170,7 @@ tyDiff m s = simplify <$> diff m s
     -- TODO: recursive type difference
     diff (TyRec _ _) _ = throwDiffError
     diff _ (TyRec _ _) = throwDiffError
-    diff t1 t2 | t1 == t2  = pure TyTop
-               | otherwise = pure t1
+    diff t1 _ = pure t1
     disjointVar :: Name -> Ty -> Typing Boolean
     disjointVar a t = lookupTyBind a >>= case _ of
       Just td -> isTopLike <$> diff t td
@@ -183,17 +183,18 @@ tyMerge (TyAnd _ _) ts = foldl1 TyAnd ts
 tyMerge t@(TyArrow targ tret) ts = TyArrow targ (tyMerge tret (f <$> ts))
   where f (TyArrow t1 t2) | t1 == targ = t2
         f _ = tyMergeCrash t ts
-tyMerge t@(TyRcd (RcdTy l tl b : Nil)) ts = TyRcd (RcdTy l (tyMerge tl (f <$> ts)) b : Nil)
-  where f (TyRcd (RcdTy l' t' b' : Nil)) | l' == l && b' == b = t'
+tyMerge t@(TyRcd rts) ts = TyRcd (f <$> ts)
+  where f (TyRcd (RcdTy l' t' b' : Nil))
+          | any (\(RcdTy l _ b) -> l' == l && b' == b) rts = RcdTy l' t' b'
         f _ = tyMergeCrash t ts
 tyMerge t@(TyForall x s t1) ts = TyForall x s (tyMerge t1 (f <$> ts))
   where f (TyForall y s' t') | y == x && s' == s = t'
         f _ = tyMergeCrash t ts
 tyMerge t ts = tyMergeCrash t ts
 
-tyMergeCrash :: Ty -> List Ty -> Ty
+tyMergeCrash :: forall a. Ty -> List Ty -> a
 tyMergeCrash t ts = unsafeCrashWith $ "CP.TypeDiff.tyMerge: " <>
-    "cannot merge " <> intercalate' ", " (map show ts) <> " according to " <> show t
+    "cannot merge " <> intercalate ", " (map show ts) <> " according to " <> show t
 
 simplify :: Ty -> Ty
 simplify t | isTopLike t = TyTop

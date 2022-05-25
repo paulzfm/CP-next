@@ -253,8 +253,10 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
     Nothing -> addTmBind self t' $ infer e2
   if tret <: sig' then trait self ret t' tret
   else if structuralize tret <: structuralize sig' then do
-    tDelta <- tyDiff (structuralize tret) (structuralize sig')
-    trait self ret t' $ if tDelta == S.TyTop then sig' else S.TyAnd sig' tDelta
+    -- traceM $ show (structuralize tret) <+> "-" <+> show (structuralize sig') <+> "="
+    tExtra <- tyDiff (structuralize tret) (structuralize sig')
+    -- traceM $ show tExtra
+    trait self ret t' $ if tExtra == S.TyTop then sig' else S.TyAnd sig' tExtra
   else throwTypeError $ "the trait does not implement" <+> show sig <+>
     "because the following subtyping does not hold:\n" <> showSubtypeTrace tret sig'
   where
@@ -319,6 +321,7 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
     inferFromSig (S.TyForall a td ty) (S.TmTAbs ((a' /\ td') : Nil) e) =
       S.TmTAbs (singleton (a' /\ (td' <|> Just td))) (inferFromSig ty' e)
       where ty' = identity $ S.tySubst a (S.TyVar a') ty
+    inferFromSig t'@(S.TyNominal _ _) e = inferFromSig (structuralize t') e
     inferFromSig _ e = e
     combineRcd :: S.Ty -> S.RcdTyList
     combineRcd (S.TyAnd (S.TyRcd xs) (S.TyRcd ys)) = xs <> ys
