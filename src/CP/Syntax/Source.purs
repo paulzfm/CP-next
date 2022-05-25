@@ -4,8 +4,8 @@ import Prelude
 
 import Data.Bifunctor (rmap)
 import Data.Either (Either(..))
-import Data.Foldable (class Foldable, any, foldMap, intercalate, null)
-import Data.List (List)
+import Data.Foldable (class Foldable, foldMap, intercalate, null)
+import Data.List (List(..), (:))
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Tuple (fst, snd)
 import Data.Tuple.Nested (type (/\), (/\))
@@ -25,15 +25,16 @@ data Ty = TyInt
         | TyAnd Ty Ty
         | TyRcd RcdTyList
         | TyVar Name
-        | TyForall TyParamList Ty
+        | TyForall Name Ty Ty
         | TyRec Name Ty
         | TyApp Ty Ty
         | TyAbs Name Ty
-        | TyTrait (Maybe Ty) Ty
+        | TyTrait Ty Ty
         | TySort Ty (Maybe Ty)
         | TySig Name Name Ty
         | TyArray Ty
         | TyDiff Ty Ty
+        | TyNominal TyConstr (List (Name /\ Ty))
 
 instance Show Ty where
   show TyInt    = "Int"
@@ -46,18 +47,22 @@ instance Show Ty where
   show (TyAnd t1 t2) = parens $ show t1 <+> "&" <+> show t2
   show (TyRcd xs) = braces $ showRcdTy xs
   show (TyVar a) = a
-  show (TyForall xs t) = parens $
-    "forall" <+> showTyParams xs <> "." <+> show t
+  show (TyForall x s t) = "∀" <+> x <+> "*" <+> show s <> "." <+> show t
   show (TyRec a t) = parens $ "mu" <+> a <> "." <+> show t
   show (TyApp t1 t2) = parens $ show t1 <+> show t2
   show (TyAbs a t) = parens $ "\\" <> a <+> "->" <+> show t
-  show (TyTrait ti to) = "Trait" <> angles (showMaybe "" ti " => " <> show to)
+  show (TyTrait ti to) = "Trait" <> angles (show ti <+> "=>" <+> show to)
   show (TySort ti to) = angles $ show ti <> showMaybe " => " to ""
   show (TySig a b t) = -- \<a, b> accepts an expanded form of original <I => O>
     parens $ "\\" <> angles (a <> "," <+> b) <+> "->" <+> show t
   show (TyArray t) = brackets $ show t
   show (TyDiff t1 t2) = parens $ show t1 <+> "\\" <+> show t2
+  show (TyNominal (TyConstr a _ _) Nil) = a
+  show (TyNominal (TyConstr a _ _) as) = intercalate " " $ a : (show <$> snd <$> as)
 
+data TyConstr = TyConstr Name (List Ty) Ty -- interfaceName supers recordType
+
+derive instance Eq TyConstr
 derive instance Eq Ty
 
 -- Terms --
@@ -172,6 +177,7 @@ showDoc e = "(" <> show e <> ")"
 
 -- Definitions --
 data Def = TyDef Boolean Name (List Name) (List Name) Ty
+         | ItDef Name (List Name) (List Ty) RcdTyList
          | TmDef Name TyParamList TmParamList (Maybe Ty) Tm
 
 instance Show Def where
@@ -182,6 +188,12 @@ instance Show Def where
     (if isRec then "typerec" else "type") <+> a <+>
     intercalate' " " (angles <$> sorts) <> intercalate' " " params <>
     "=" <+> show t <> ";"
+  show (ItDef x params supers rcd) = "interface" <+> x <+> intercalate' " " params <>
+    extendsClause <+> "{" <> showRcdTy rcd <> "};"
+    where
+      extendsClause = case supers of
+        Nil -> ""
+        _ -> " extends" <+> intercalate' ", " (show <$> supers)
   show (TmDef x tyParams tmParams t e) = x <+>
     showTyParams tyParams <> showTmParams tmParams <>
     showMaybe ": " t " " <> "=" <+> show e <> ";"
@@ -201,18 +213,23 @@ tySubst a s (TyAnd t1 t2) = TyAnd (tySubst a s t1) (tySubst a s t2)
 tySubst a s (TyRcd xs) =
   TyRcd (xs <#> \(RcdTy l t opt) -> RcdTy l (tySubst a s t) opt)
 tySubst a s (TyVar a') = if a == a' then s else TyVar a'
-tySubst a s (TyForall xs t) = TyForall (rmap (map (tySubst a s)) <$> xs)
-  (if any ((_ == a) <<< fst) xs then t else tySubst a s t)
+tySubst a s (TyForall x tx t) = TyForall x (tySubst a s tx)
+  (if a == x then t else tySubst a s t)
 tySubst a s (TyRec a' t) = TyRec a' (if a == a' then t else tySubst a s t)
 tySubst a s (TyApp t1 t2) = TyApp (tySubst a s t1) (tySubst a s t2)
 tySubst a s (TyAbs a' t) = TyAbs a' (if a == a' then t else tySubst a s t)
-tySubst a s (TyTrait ti to) = TyTrait (tySubst a s <$> ti) (tySubst a s to)
+tySubst a s (TyTrait ti to) = TyTrait (tySubst a s ti) (tySubst a s to)
 tySubst a s (TySort ti to) = TySort (tySubst a s ti) (tySubst a s <$> to)
 tySubst a s (TySig a' b' t) = TySig a' b'
   (if a == a' || a == b' then t else tySubst a s t)
 tySubst a s (TyArray t) = TyArray (tySubst a s t)
 tySubst a s (TyDiff t1 t2) = TyDiff (tySubst a s t1) (tySubst a s t2)
+tySubst a s (TyNominal c as) = TyNominal c $ (rmap $ tySubst a s) <$> as
 tySubst _ _ t = t
+
+unfold :: Ty -> Ty
+unfold mu@(TyRec a t) = tySubst a mu t
+unfold t = t
 
 -- Helpers --
 

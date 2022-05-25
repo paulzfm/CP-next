@@ -1,4 +1,4 @@
-module Language.CP.Subtyping where
+module Language.CP.Subtype.Core where
 
 import Prelude
 

@@ -8,14 +8,15 @@ import Data.Array as Array
 import Data.CodePoint.Unicode (isLower)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
-import Data.List (List, foldl, many, null, some, toUnfoldable)
+import Data.List (List(..), foldl, many, null, some, toUnfoldable)
 import Data.List.NonEmpty (toList)
-import Data.Maybe (Maybe(..), isJust, isNothing, optional)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, optional)
 import Data.String (codePointFromChar)
 import Data.String.CodeUnits as SCU
 import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Syntax.Common (ArithOp(..), BinOp(..), CompOp(..), LogicOp(..), UnOp(..))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
+import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), RcdTyList, SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
 import Language.CP.Util (foldl1, isCapitalized)
 import Parsing (Parser, fail, position)
 import Parsing.Combinators (between, choice, endBy, lookAhead, manyTill, option, sepEndBy, sepEndBy1, try)
@@ -37,7 +38,7 @@ program = do
     Nothing -> TmUnit
 
 def :: SParser Def
-def = tyDef <|> tmDef
+def = tyDef <|> itDef <|> tmDef
 
 tyDef :: SParser Def
 tyDef = do
@@ -49,6 +50,17 @@ tyDef = do
   t <- ty
   symbol ";"
   pure $ TyDef isRec a sorts parms t
+
+itDef :: SParser Def
+itDef = do
+  reserved "interface"
+  x <- upperIdentifier
+  params <- many upperIdentifier
+  supers <- reserved "extends" *> (toList <$> sepEndBy1 ty (symbol ",")) <* symbol "=>"
+        <|> optional (symbol "=>") $> Nil
+  rcd <- rcdTyList
+  symbol ";"
+  pure $ ItDef x params supers rcd
 
 tmDef :: SParser Def
 tmDef = do
@@ -348,7 +360,7 @@ aty t = choice [ reserved "Int"    $> TyInt
                , reserved "Bot"    $> TyBot
                , upperIdentifier <#> TyVar
                , brackets t <#> TyArray
-               , recordTy
+               , TyRcd <$> rcdTyList
                , parens t
                ]
 
@@ -361,21 +373,22 @@ sortTy t = angles do
 forallTy :: SParser Ty
 forallTy = do
   reserved "forall"
-  xs <- some (tyParams true)
+  x <- identifier
+  s <- (symbol "*" *> ty) <|> pure TyTop
   symbol "."
   t <- ty
-  pure $ TyForall xs t
+  pure $ TyForall x s t
 
 traitTy :: SParser Ty
 traitTy = do
   reserved "Trait"
   angles do
-    ti <- optional (try (ty <* symbol "=>"))
+    mt <- optional (try (ty <* symbol "=>"))
     to <- ty
-    pure $ TyTrait ti to
+    pure $ TyTrait (fromMaybe to mt) to
 
-recordTy :: SParser Ty
-recordTy = braces $ TyRcd <$> sepEndBySemi do
+rcdTyList :: SParser RcdTyList
+rcdTyList = braces $ sepEndBySemi do
   l <- identifier
   opt <- isJust <$> optional (symbol "?")
   symbol ":"
@@ -387,6 +400,13 @@ toperators = [ [ Infix (reservedOp "&"  $> TyAnd) AssocLeft  ]
              , [ Infix (reservedOp "\\" $> TyDiff) AssocLeft ]
              , [ Infix (reservedOp "->" $> TyArrow) AssocRight ]
              ]
+
+subtypeJudgment :: SParser (Ty /\ Ty)
+subtypeJudgment = do
+  t1 <- ty
+  symbol ":<:"
+  t2 <- ty
+  pure $ t1 /\ t2
 
 -- Helpers --
 
@@ -431,6 +451,7 @@ langDef = LanguageDef (unGenLanguageDef haskellStyle) { reservedNames =
   , "trait", "implements", "inherits", "override", "new", "fold", "unfold"
   , "let", "letrec", "open", "in", "with", "type", "typerec", "forall"
   , "Int", "Double", "String", "Bool", "Top", "Bot", "Trait"
+  , "interface", "extends"
   ]
 }
 

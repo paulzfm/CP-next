@@ -18,4 +18,5 @@ If you want to run CP programs locally using a CLI, you can follow the procedure
 - [x] REPL: store defined/imported bindings in the REPL context
 - [x] REPL: auto-completer
 - [ ] REPL: load history from file
-- [ ] Type system: nominal typing
+- [x] Type system: interface type (nominal)
+- [ ] Type system: infer type arguments

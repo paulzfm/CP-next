@@ -3,16 +3,16 @@ module Language.CP.Transform where
 import Prelude
 
 import Control.Alt ((<|>))
+import Control.Monad.Reader (asks)
 import Data.Bitraversable (rtraverse)
-import Data.List (List(..), foldr)
+import Data.List (List(..))
 import Data.Maybe (Maybe(..))
 import Data.Traversable (for, traverse)
-import Data.Tuple (fst, uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
-import Language.CP.Context (Typing, addTyBind, lookupSort, lookupTyAlias, lookupTyBind, throwTypeError)
+import Language.CP.Context (Typing, addTyBind, lookupSort, lookupTyAlias, lookupTyBind, ppTypeVars, throwTypeError)
+import Language.CP.Subtype.Source (structuralize, tyDiff)
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source as S
-import Language.CP.TypeDiff (tyDiff)
 import Language.CP.Util (foldl1, isCapitalized, (<+>))
 
 transform :: S.Ty -> Typing C.Ty
@@ -28,16 +28,10 @@ translate :: S.Ty -> Typing C.Ty
 translate (S.TyRcd Nil) = pure C.TyTop
 translate (S.TyRcd xs) = foldl1 C.TyAnd <$> for xs \(S.RcdTy l t opt) ->
   C.TyRcd l <$> translate t <@> opt
-translate (S.TyForall xs t) =
-  foldr (uncurry C.TyForall) <$> translate t <*>
-    traverse (rtraverse disjointness) xs
-  where disjointness :: Maybe S.Ty -> Typing C.Ty
-        disjointness (Just s) = translate s
-        disjointness Nothing  = pure C.TyTop
+translate (S.TyForall x s t) = C.TyForall x <$> translate s <*> translate t
 translate (S.TyDiff t1 t2) = do
-  t1' <- translate t1
-  t2' <- translate t2
-  tyDiff t1' t2'
+  t <- tyDiff t1 t2
+  translate t
 
 translate S.TyInt    = pure C.TyInt
 translate S.TyDouble = pure C.TyDouble
@@ -49,18 +43,17 @@ translate (S.TyAnd t1 t2) = C.TyAnd <$> translate t1 <*> translate t2
 translate (S.TyArrow t1 t2) = C.TyArrow <$> translate t1 <*> translate t2 <@> false
 translate (S.TyVar a) = pure $ C.TyVar a
 translate (S.TyRec a t) = C.TyRec a <$> translate t
-translate (S.TyTrait Nothing to) = translate to >>= \to' -> pure $ C.TyArrow to' to' true
-translate (S.TyTrait (Just ti) to) =
-  C.TyArrow <$> translate ti <*> translate to <@> true
+translate (S.TyTrait ti to) = C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
+translate t@(S.TyNominal _ _) = translate (structuralize t)
 translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t
 
 -- We don't need to check disjointness in the process of type expansion,
 -- so a placeholder of core types will be added to TyBindEnv.
-someTy :: C.Ty
-someTy = C.TyTop
+someTy :: S.Ty
+someTy = S.TyTop
 
 -- type-level beta-reduction is also done here
 expand :: S.Ty -> Typing S.Ty
@@ -77,10 +70,11 @@ expand (S.TyVar a) = do
       mt <- lookupTyAlias a
       case mt of
         Just t -> expand t
-        Nothing -> throwTypeError $ "type variable" <+> show a <+> "is undefined"
-expand (S.TyForall xs t) =
-  S.TyForall <$> traverse (rtraverse (traverse expand)) xs <*>
-  foldr (\x s -> addTyBind (fst x) someTy s) (expand t) xs
+        Nothing -> do
+          typeVars <- asks ppTypeVars
+          throwTypeError $ "type variable" <+> show a <+> "is undefined\n" <>
+            "currently defined type variables:\n" <> typeVars
+expand (S.TyForall x s t) = S.TyForall x <$> expand s <*> addTyBind x someTy (expand t)
 expand (S.TyRec a t) = S.TyRec a <$> addTyBind a someTy (expand t)
 expand (S.TyApp t1 t2) = do
   t1' <- expand t1
@@ -96,7 +90,7 @@ expand (S.TyApp t1 t2) = do
         _ -> throwTypeError $ "sig instantiation expected a sort, but got" <+> show t2
     _ -> throwTypeError $  "expected an applicable type, but got" <+> show t1
 expand (S.TyAbs a t) = addTyBind a someTy $ S.TyAbs a <$> expand t
-expand (S.TyTrait ti to) = S.TyTrait <$> traverse expand ti <*> expand to
+expand (S.TyTrait ti to) = S.TyTrait <$> expand ti <*> expand to
 expand (S.TySort ti to) = do
   ti' <- expand ti
   mto <- traverse expand to
@@ -110,6 +104,7 @@ expand (S.TySort ti to) = do
       _ -> pure $ S.TySort ti' (Just ti')
 expand (S.TyArray t) = S.TyArray <$> expand t
 expand (S.TyDiff t1 t2) = S.TyDiff <$> expand t1 <*> expand t2
+expand (S.TyNominal c args) = S.TyNominal c <$> traverse (rtraverse expand) args
 expand t = pure t
 
 -- If a type declaration is parametrized with sorts,
@@ -126,12 +121,11 @@ distinguish _ isOut (S.TyRcd xs) = S.TyRcd <$> for xs \(S.RcdTy l t opt) ->
   S.RcdTy l <$> distinguish (isCapitalized l) isOut t <@> opt
 distinguish isCtor true t@(S.TyVar a) = do
   mb <- lookupSort a
-  case mb of Just b -> do if isCtor then pure $ S.TyTrait (Just t) (S.TyVar b)
+  case mb of Just b -> do if isCtor then pure $ S.TyTrait t (S.TyVar b)
                                     else pure $ S.TyVar b
              Nothing -> pure $ S.TyVar a
 -- TODO: remove bound variable names from SortEnv
-distinguish isCtor isOut (S.TyForall xs t) = S.TyForall <$>
-  traverse (rtraverse (traverse (distinguish isCtor isOut))) xs <*>
+distinguish isCtor isOut (S.TyForall x s t) = S.TyForall x <$> distinguish isCtor isOut s <*>
   distinguish isCtor isOut t
 distinguish isCtor isOut (S.TyRec a t) = S.TyRec a <$> distinguish isCtor isOut t
 distinguish isCtor isOut (S.TyApp t1 t2) =
@@ -139,7 +133,7 @@ distinguish isCtor isOut (S.TyApp t1 t2) =
 -- TODO: remove bound variable names from SortEnv
 distinguish isCtor isOut (S.TyAbs a t) = S.TyAbs a <$> distinguish isCtor isOut t
 distinguish isCtor isOut (S.TyTrait ti to) = S.TyTrait <$>
-  traverse (distinguish isCtor (not isOut)) ti <*> distinguish isCtor isOut to
+  distinguish isCtor (not isOut) ti <*> distinguish isCtor isOut to
 distinguish isCtor isOut (S.TyArray t) = S.TyArray <$> distinguish isCtor isOut t
 distinguish isCtor isOut (S.TyDiff t1 t2) = 
   S.TyDiff <$> distinguish isCtor isOut t1 <*> distinguish isCtor isOut t2
