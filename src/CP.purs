@@ -12,7 +12,7 @@ import Effect (Effect)
 import Effect.Exception (throw)
 import Language.CP.Context (Checking, Mode(..), Pos(..), TypeError(..), Typing, emptyCtx, fromState, letTrans, runTyping, throwCheckError, throwTypeError)
 import Language.CP.Desugar (desugar, desugarProg)
-import Language.CP.Parser (expr, program, subtypeJudgment, whiteSpace)
+import Language.CP.Parser (expr, program, subtypeJudgment, ty, whiteSpace)
 import Language.CP.Semantics.HOAS as HOAS
 import Language.CP.Semantics.NaturalClosure as Closure
 import Language.CP.Semantics.NaturalSubst as BigStep
@@ -20,7 +20,7 @@ import Language.CP.Semantics.StepTrace as StepTrace
 import Language.CP.Semantics.Subst as SmallStep
 import Language.CP.Subtype.Source (showSubtypeTrace)
 import Language.CP.Syntax.Source (Prog(..), Tm, showDoc)
-import Language.CP.Transform (expand)
+import Language.CP.Transform (expand, transform')
 import Language.CP.Typing (checkProg, infer)
 import Parsing (ParseError(..), runParser, Position(..))
 import Parsing.String (eof)
@@ -31,6 +31,13 @@ inferType code = case runParser code (whiteSpace *> expr <* eof) of
   Right e -> do
     _ /\ t <- infer $ desugar e
     pure $ show t
+
+transType :: String -> Typing String
+transType code = case runParser code (whiteSpace *> ty <* eof) of
+  Left err -> throwTypeError $ showParseError err code
+  Right t -> do
+    t2 /\ t1 <- transform' t
+    pure $ show t1 <> "\n(" <> show t2 <> ")"
 
 judgeSubtype :: String -> Typing String
 judgeSubtype judgment = case runParser judgment (whiteSpace *> subtypeJudgment <* eof) of

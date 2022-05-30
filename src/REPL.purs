@@ -22,7 +22,7 @@ import Effect.Console (log)
 import Effect.Exception (message, try)
 import Effect.Now (nowTime)
 import Effect.Ref (Ref, modify_, new, read, write)
-import Language.CP (importDefs, inferType, interpret, judgeSubtype, showTypeError)
+import Language.CP (importDefs, inferType, interpret, judgeSubtype, showTypeError, transType)
 import Language.CP.Context (CompilerState, Mode(..), clearEnv, fromState, initState, ppState, runTyping)
 import Language.CP.Util (unsafeFromJust)
 import Node.Encoding (Encoding(..))
@@ -45,6 +45,7 @@ printHelp _ _ = log $ stripMargin
   |  :env
   |  :env clear
   |  :type <expr>
+  |  :type eval <type>
   |  :subtype <type> <: <type>
   |  :load <file>
   |  :import <file>
@@ -112,6 +113,13 @@ evalProg code ref = do
       log output
       write st' ref
 
+evalType :: Cmd
+evalType code ref = do
+  st <- read ref
+  case runTyping (transType code) (fromState st) of
+    Left err -> fatal $ showTypeError err
+    Right output -> log output
+
 errorCmd :: Cmd
 errorCmd input ref = do
   fatal $ "Invalid command: " <> input
@@ -134,6 +142,7 @@ dispatch input = ifMatchesAny (":?" : ":h" : ":help" : Nil) printHelp $
   ifMatches ":mode" showOrSetMode $
   ifMatches ":timing" setTiming $
   ifMatches ":env" showOrClearEnv $
+  ifMatches ":type eval" (mayTime evalType) $
   ifMatches ":type" (mayTime typeExpr) $
   ifMatches ":subtype" (mayTime checkSubtype) $
   ifMatches ":load" (mayTime loadFile) $
@@ -208,7 +217,7 @@ completer = makeCompleter $ unsafeFromJust $ fromArray
   , ConstSyntax ":timing"
   , ConstSyntax ":env"
   , ConstSyntax ":env clear"
-  , ConstSyntax ":type"
+  , ConstSyntax ":type", ConstSyntax ":type eval"
   , ConstSyntax ":subtype"
   , FileSyntax ":load"
   , FileSyntax ":import" ]

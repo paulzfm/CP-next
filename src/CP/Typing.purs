@@ -587,6 +587,7 @@ checkDef (TyDef isRec a sorts params t) = do
     sig t' = foldr (uncurry S.TySig) (foldr S.TyAbs t' params) dualSorts
     addRec :: forall a. Typing a -> Typing a
     addRec = if isRec then addTyBind a S.TyTop else identity
+    -- NOTE: type params are not allowed if `isRec` is true
     rec :: S.Ty -> S.Ty
     rec = if isRec then S.TyRec a else identity
 checkDef (ItDef a params supers fs) = do
