@@ -11,9 +11,9 @@ import Data.String.Utils (repeat)
 import Data.Traversable (traverse)
 import Data.Tuple (uncurry)
 import Data.Tuple.Nested ((/\))
-import Language.CP.Context (Typing, lookupTyBind, throwTypeError)
+import Language.CP.Context (Typing, lookupTyBind, lookupTyConstr, throwTypeError)
 import Language.CP.Syntax.Common (Label, Name)
-import Language.CP.Syntax.Source (RcdTy(..), Ty(..), TyConstr(..), intercalate', tySubst)
+import Language.CP.Syntax.Source (RcdTy(..), Ty(..), intercalate', tySubst)
 import Language.CP.Util (foldl1, unsafeFromJust, zipWithIndex, (<+>))
 import Partial.Unsafe (unsafeCrashWith)
 
@@ -23,45 +23,60 @@ data STree = SLeaf Ty Ty
 
 -- Require: expanded types
 -- if success, return Nothing
-subtype :: Ty -> Ty -> Maybe STree
-subtype TyBot _ = Nothing
-subtype _ t | isTopLike t = Nothing
-subtype t1 t2 | t1 == t2  = Nothing
-subtype t1 t2 | Just ts <- split t2 = SNode t1 t2 <$>
-  foldl1 (<|>) ((t1 `subtype` _) <$> ts)
-subtype t1@(TyArrow targ1 tret1) t2@(TyArrow targ2 tret2) = SNode t1 t2 <$>
-  targ2 `subtype` targ1 <|> tret1 `subtype` tret2
-subtype t1 t2 | Just ts <- split t1 = SOr t1 t2 <$>
-  foldl f (Just Nil) ((_ `subtype` t2) <$> ts)
+subtype :: Ty -> Ty -> Typing (Maybe STree)
+subtype TyBot _ = pure Nothing
+subtype _ t | isTopLike t = pure Nothing
+subtype t1 t2 | t1 == t2  = pure Nothing
+subtype t1 t2 | Just ts <- split t2 = do
+  rs <- traverse (t1 `subtype` _) ts
+  pure $ SNode t1 t2 <$> foldl1 (<|>) rs
+subtype t1@(TyArrow targ1 tret1) t2@(TyArrow targ2 tret2) = do
+  r1 <- targ2 `subtype` targ1
+  r2 <- tret1 `subtype` tret2
+  pure $ SNode t1 t2 <$> r1 <|> r2
+subtype t1 t2 | Just ts <- split t1 = do
+  rs <- traverse (_ `subtype` t2) ts
+  pure $ SOr t1 t2 <$> foldl f (Just Nil) rs
   where f (Just trees) (Just tree) = Just $ trees <> singleton tree
         f _ _ = Nothing
-subtype _ (TyRcd (RcdTy _ _ true : Nil)) = Nothing
+subtype _ (TyRcd (RcdTy _ _ true : Nil)) = pure Nothing
 subtype t1@(TyRcd (RcdTy a ta false : Nil)) t2@(TyRcd (RcdTy b tb false : Nil))
-  | a == b    = SNode t1 t2 <$> ta `subtype` tb
-  | otherwise = Just $ SLeaf t1 t2
-subtype t1@(TyForall a1 td1 t1') t2@(TyForall a2 td2 t2') = SNode t1 t2 <$>
-  td2 `subtype` td1 <|> t1' `subtype` tySubst a2 (TyVar a1) t2'
-subtype t1@(TyRec a1 t1') t2@(TyRec a2 t2') = SNode t1 t2 <$>
-  tySubst a1 (tyRcd a1 t1' false) t1' `subtype` tySubst a2 (tyRcd a1 t2'' false) t2'
+  | a == b    = do
+    r <- ta `subtype` tb
+    pure $ SNode t1 t2 <$> r
+  | otherwise = pure $ Just $ SLeaf t1 t2
+subtype t1@(TyForall a1 td1 t1') t2@(TyForall a2 td2 t2') = do
+  r1 <- td2 `subtype` td1
+  r2 <- t1' `subtype` tySubst a2 (TyVar a1) t2'
+  pure $ SNode t1 t2 <$> r1 <|> r2
+subtype t1@(TyRec a1 t1') t2@(TyRec a2 t2') = do
+  r <- tySubst a1 (tyRcd a1 t1' false) t1' `subtype` tySubst a2 (tyRcd a1 t2'' false) t2'
+  pure $ SNode t1 t2 <$> r
   where t2'' = tySubst a2 (TyVar a1) t2'
-subtype t1@(TyArray t1') t2@(TyArray t2') = SNode t1 t2 <$> t1' `subtype` t2'
-subtype t1@(TyTrait ti1 to1) t2@(TyTrait ti2 to2) = SNode t1 t2 <$>
-  TyArrow ti1 to1 `subtype` TyArrow ti2 to2
-subtype t1@(TyNominal _ _) t2@(TyNominal _ _) = SOr t1 t2 <$>
-  foldl f (Just Nil) ((_ `subtype` t2) <$> directSupers t1)
+subtype t1@(TyArray t1') t2@(TyArray t2') = do
+  r <- t1' `subtype` t2'
+  pure $ SNode t1 t2 <$> r
+subtype t1@(TyTrait ti1 to1) t2@(TyTrait ti2 to2) = do
+  r <- TyArrow ti1 to1 `subtype` TyArrow ti2 to2
+  pure $ SNode t1 t2 <$> r
+subtype t1@(TyNominal _ _) t2@(TyNominal _ _) = do
+  ss <- lookupSupers t1
+  rs <- traverse (_ `subtype` t2) ss
+  pure $ SOr t1 t2 <$> foldl f (Just Nil) rs
   where f (Just trees) (Just tree) = Just $ trees <> singleton tree
         f _ _ = Nothing
-subtype t1@(TyNominal _ _) t2 = SNode t1 t2 <$> structuralize t1 `subtype` t2
-subtype t1 t2 = Just $ SLeaf t1 t2
+subtype t1@(TyNominal _ _) t2 = do
+  t1' <- structuralize t1
+  r <- t1' `subtype` t2
+  pure $ SNode t1 t2 <$> r 
+subtype t1 t2 = pure $ Just $ SLeaf t1 t2
 
-directSupers :: Ty -> List Ty
-directSupers (TyNominal (TyConstr _ ss _) as) = (\t -> foldr (uncurry tySubst) t as) <$> ss
-directSupers _ = Nil
-
-showSubtypeTrace :: Ty -> Ty -> String
-showSubtypeTrace t1 t2 = case t1 `subtype` t2 of
-  Just tree -> pp 0 "" tree
-  Nothing -> "subtyping successful"
+getSubtypeTrace :: Ty -> Ty -> Typing String
+getSubtypeTrace t1 t2 = do
+  r <- t1 `subtype` t2
+  pure $ case r of
+    Just tree -> pp 0 "" tree
+    Nothing -> "subtyping successful"
   where
     pp :: Int -> String -> STree -> String
     pp k prefix t = unsafeFromJust (repeat k " ") <> prefix <> case t of
@@ -76,15 +91,15 @@ showSubtypeTrace t1 t2 = case t1 `subtype` t2 of
             Just s -> s
             Nothing -> show i
 
-isSubType :: Ty -> Ty -> Boolean
-isSubType t1 t2 = isNothing $ t1 `subtype` t2
+isSubType :: Ty -> Ty -> Typing Boolean
+isSubType t1 t2 = isNothing <$> t1 `subtype` t2
 
 infix 4 isSubType as <:
 
 tyRcd :: Label -> Ty -> Boolean -> Ty
 tyRcd l t b = TyRcd $ RcdTy l t b : Nil
 
-isSupertype :: Ty -> Ty -> Boolean
+isSupertype :: Ty -> Ty -> Typing Boolean
 isSupertype = flip isSubType
 
 infix 4 isSupertype as :>
@@ -210,19 +225,34 @@ simplify (TyRec a t) = TyRec a (simplify t)
 simplify (TyArray t) = TyArray (simplify t)
 simplify t = t
 
-structuralize :: Ty -> Ty
-structuralize (TyArrow t1 t2) = TyArrow (structuralize t1) (structuralize t2)
-structuralize (TyAnd t1 t2) = TyAnd (structuralize t1) (structuralize t2)
-structuralize (TyRcd rts) = TyRcd $ (\(RcdTy l t b) -> RcdTy l (structuralize t) b) <$> rts
-structuralize (TyForall a td t) = TyForall a (structuralize td) (structuralize t)
-structuralize (TyRec x t) = TyRec x (structuralize t)
-structuralize (TyApp t1 t2) = TyApp (structuralize t1) (structuralize t2)
-structuralize (TyAbs x t) = TyAbs x (structuralize t)
-structuralize (TyTrait t1 t2) = TyTrait (structuralize t1) (structuralize t2)
-structuralize (TySort t1 t2) = TySort (structuralize t1) (structuralize <$> t2)
-structuralize (TySig x y t) = TySig x y (structuralize t)
-structuralize (TyArray t) = TyArray (structuralize t)
-structuralize (TyDiff t1 t2) = TyDiff (structuralize t1) (structuralize t2)
-structuralize t@(TyNominal (TyConstr _ _ rcd) as) = foldl TyAnd (foldr (uncurry tySubst) rcd as) $
-  structuralize <$> directSupers t
-structuralize t = t
+-- Nominal type
+lookupSupers :: Ty -> Typing (List Ty)
+lookupSupers (TyNominal c as) = do
+  ss /\ _ <- lookupTyConstr c
+  pure $ (\t -> foldr (uncurry tySubst) t as) <$> ss
+lookupSupers t = throwTypeError $
+  "CP.Subtype.Source.lookupSupers: requires nominal type, but got" <+> show t
+
+structuralize :: Ty -> Typing Ty
+structuralize (TyArrow t1 t2) = TyArrow <$> structuralize t1 <*> structuralize t2
+structuralize (TyAnd t1 t2) = TyAnd <$> structuralize t1 <*> structuralize t2
+structuralize (TyRcd rts) = TyRcd <$> traverse f rts
+  where
+    f (RcdTy l t opt) = do
+      t' <- structuralize t
+      pure $ RcdTy l t' opt
+structuralize (TyForall a td t) = TyForall a <$> structuralize td <*> structuralize t
+structuralize (TyRec x t) = TyRec x <$> structuralize t
+structuralize (TyApp t1 t2) = TyApp <$> structuralize t1 <*> structuralize t2
+structuralize (TyAbs x t) = TyAbs x <$> structuralize t
+structuralize (TyTrait t1 t2) = TyTrait <$> structuralize t1 <*> structuralize t2
+structuralize (TySort t1 t2) = TySort <$> structuralize t1 <*> traverse structuralize t2
+structuralize (TySig x y t) = TySig x y <$> structuralize t
+structuralize (TyArray t) = TyArray <$> structuralize t
+structuralize (TyDiff t1 t2) = TyDiff <$> structuralize t1 <*> structuralize t2
+structuralize t@(TyNominal c as) = do
+  ss <- lookupSupers t
+  ss' <- traverse structuralize ss
+  _ /\ rcd <- lookupTyConstr c
+  pure $ foldl TyAnd (foldr (uncurry tySubst) rcd as) ss'
+structuralize t = pure t

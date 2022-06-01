@@ -45,7 +45,7 @@ translate (S.TyVar a) = pure $ C.TyVar a
 translate (S.TyRec a t) = C.TyRec a <$> translate t
 translate (S.TyTrait ti to) = C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
-translate t@(S.TyNominal _ _) = translate (structuralize t)
+translate t@(S.TyNominal _ _) = structuralize t >>= translate
 translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t

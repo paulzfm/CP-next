@@ -21,10 +21,11 @@ import Parsing (Position)
 
 type Typing = ReaderT Ctx (Except TypeError)
 
-type Ctx = { tmBindEnv  :: Map Name S.Ty -- typing
-           , tyBindEnv  :: Map Name S.Ty -- disjointness
-           , tyAliasEnv :: Map Name S.Ty -- synonym
-           , sortEnv    :: Map Name Name -- distinguishing
+type Ctx = { tmBindEnv    :: Map Name S.Ty -- typing
+           , tyBindEnv    :: Map Name S.Ty -- disjointness
+           , tyAliasEnv   :: Map Name S.Ty -- synonym
+           , sortEnv      :: Map Name Name -- distinguishing
+           , tyConstrEnv  :: Map Name (List S.Ty /\ S.Ty) -- nominal type constr info
            , pos :: Pos
            }
 
@@ -36,6 +37,7 @@ emptyCtx =  { tmBindEnv : empty
             , tyBindEnv : empty
             , tyAliasEnv : empty
             , sortEnv : empty
+            , tyConstrEnv : empty
             , pos : UnknownPos
             }
 
@@ -58,6 +60,13 @@ lookupTyAlias name = lookup name <$> asks (_.tyAliasEnv)
 lookupSort :: Name -> Typing (Maybe Name)
 lookupSort name = lookup name <$> asks (_.sortEnv)
 
+lookupTyConstr :: Name -> Typing (List S.Ty /\ S.Ty)
+lookupTyConstr name = do
+  env <- asks (_.tyConstrEnv)
+  case lookup name env of
+    Just t -> pure t
+    Nothing -> throwTypeError $ "type constructor" <+> show name <+> "is undefined"
+
 addToEnv :: forall a b. ((Map Name b -> Map Name b) -> Ctx -> Ctx) ->
                         Name -> b -> Typing a -> Typing a
 addToEnv map name ty = if name == "_" then identity
@@ -74,6 +83,9 @@ addTyAlias = addToEnv \f r -> r { tyAliasEnv = f r.tyAliasEnv }
 
 addSort :: forall a. Name -> Name -> Typing a -> Typing a
 addSort = addToEnv \f r -> r { sortEnv = f r.sortEnv }
+
+addTyConstr :: forall a. Name -> (List S.Ty /\ S.Ty) -> Typing a -> Typing a
+addTyConstr = addToEnv \f r -> r { tyConstrEnv = f r.tyConstrEnv }
 
 localPos :: forall a. (Pos -> Pos) -> Typing a -> Typing a
 localPos f = local \r -> r { pos = f r.pos }
@@ -112,6 +124,7 @@ type CompilerState =  { mode        :: Mode
                       , timing      :: Boolean
                       , tmBindings  :: List (Name /\ S.Ty /\ LetTrans)
                       , tyAliases   :: Map Name S.Ty
+                      , tyConstrs   :: Map Name (List S.Ty /\ S.Ty)
                       }
 
 initState :: CompilerState
@@ -119,6 +132,7 @@ initState = { mode       : BigStep
             , timing     : false
             , tmBindings : Nil
             , tyAliases  : empty
+            , tyConstrs  : empty
             }
 
 toList :: forall k v. Map k v -> List (k /\ v)
@@ -132,15 +146,16 @@ ppState st = intercalate' "\n" (map ppTmBinding st.tmBindings) <>
     ppTyAlias (x /\ t) = "type" <+> x <+> "=" <+> show t
 
 clearEnv :: CompilerState -> CompilerState
-clearEnv st = st { tmBindings = Nil, tyAliases = empty }
+clearEnv st = st { tmBindings = Nil, tyAliases = empty, tyConstrs = empty }
 
 fromState :: CompilerState -> Ctx
-fromState b = { tmBindEnv : fromFoldable $ map (\(x /\ t /\ _) -> x /\ t) b.tmBindings
-              , tyAliasEnv : b.tyAliases
-              , tyBindEnv : empty
-              , sortEnv : empty
-              , pos : UnknownPos
-              }
+fromState st =  { tmBindEnv : fromFoldable $ map (\(x /\ t /\ _) -> x /\ t) st.tmBindings
+                , tyAliasEnv : st.tyAliases
+                , tyConstrEnv : st.tyConstrs
+                , tyBindEnv : empty
+                , sortEnv : empty
+                , pos : UnknownPos
+                }
 
 letTrans :: CompilerState -> LetTrans
 letTrans st ty = foldr (\f -> \acc -> f acc) ty $ (\(_ /\ _ /\ f) -> f) <$> st.tmBindings

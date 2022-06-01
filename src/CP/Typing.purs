@@ -8,24 +8,25 @@ import Control.Monad.Reader (asks)
 import Control.Monad.State (gets, modify_)
 import Data.Array (elem, head, notElem, null, unzip)
 import Data.Either (Either(..))
-import Data.Foldable (all, find, foldr, traverse_)
+import Data.Foldable (all, foldr, traverse_)
 import Data.List (List(..), filter, last, singleton, sort, zip, (:))
-import Data.Map (insert)
+import Data.Map (Map, insert, keys, lookup)
+import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
-import Data.Set (Set, member)
+import Data.Set (Set, member, union)
 import Data.Set as Set
 import Data.Traversable (for, traverse)
 import Data.Tuple (fst, uncurry)
 import Data.Tuple.Nested (type (/\), (/\))
-import Language.CP.Context (Checking, LetTrans, Pos(..), TypeError(..), Typing, addSort, addTmBind, addTyBind, fromState, localPos, lookupTmBind, lookupTyBind, runTyping, throwTypeError, toList)
+import Language.CP.Context (Checking, LetTrans, Pos(..), TypeError(..), Typing, addSort, addTmBind, addTyAlias, addTyBind, fromState, localPos, lookupTmBind, lookupTyBind, runTyping, throwTypeError, toList)
 import Language.CP.Desugar (deMP, desugar)
-import Language.CP.Subtype.Source (isTopLike, showSubtypeTrace, structuralize, tyDiff, tyRcd, (<:), (===))
-import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
+import Language.CP.Subtype.Source (getSubtypeTrace, isTopLike, structuralize, tyDiff, tyRcd, (<:), (===))
+import Language.CP.Syntax.Common (BinOp(..), Name, UnOp(..), Label)
 import Language.CP.Syntax.Core as C
 import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..), intercalate')
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (expand, transform, transform', transformTyDef)
-import Language.CP.Util (foldl1, foldr1, unsafeFromJust, (<+>))
+import Language.CP.Util (foldl1, foldr1, unsafeFromJust, (<&&>), (<+>))
 import Partial.Unsafe (unsafeCrashWith)
 
 infer :: S.Tm -> Typing (C.Tm /\ S.Ty)
@@ -39,13 +40,13 @@ infer S.TmUndefined  = pure $ C.TmUndefined /\ S.TyBot
 infer (S.TmUnary Neg e) = do
   e' /\ t <- infer e
   let core ty ty' = C.TmUnary Neg (C.TmAnno e' ty') /\ ty
-  if t <: S.TyInt then pure $ core S.TyInt C.TyInt
-  else if t <: S.TyDouble then pure $ core S.TyDouble C.TyDouble
+  t <: S.TyInt >>= if _ then pure $ core S.TyInt C.TyInt
+  else t <: S.TyDouble >>= if _ then pure $ core S.TyDouble C.TyDouble
   else throwTypeError $ "Neg is not defined for" <+> show t
 infer (S.TmUnary Not e) = do
   e' /\ t <- infer e
   let core = C.TmUnary Not (C.TmAnno e' C.TyBool) /\ S.TyBool
-  if t <: S.TyBool then pure core
+  t <: S.TyBool >>= if _ then pure core
   else throwTypeError $ "Not is not defined for" <+> show t
 infer (S.TmUnary Len e) = do
   e' /\ t <- infer e
@@ -56,41 +57,41 @@ infer (S.TmBinary (Arith op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   let core ty ty' = C.TmBinary (Arith op) (C.TmAnno e1' ty') (C.TmAnno e2' ty') /\ ty
-  if t1 <: S.TyInt && t2 <: S.TyInt then pure $ core S.TyInt C.TyInt
-  else if t1 <: S.TyDouble && t2 <: S.TyDouble then pure $ core S.TyDouble C.TyDouble
+  t1 <: S.TyInt <&&> t2 <: S.TyInt >>= if _ then pure $ core S.TyInt C.TyInt
+  else t1 <: S.TyDouble <&&> t2 <: S.TyDouble >>= if _ then pure $ core S.TyDouble C.TyDouble
   else throwTypeError $
     "ArithOp is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary (Comp op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   let core ty' = C.TmBinary (Comp op) (C.TmAnno e1' ty') (C.TmAnno e2' ty') /\ S.TyBool
-  if t1 <: S.TyInt && t2 <: S.TyInt then pure $ core C.TyInt
-  else if t1 <: S.TyDouble && t2 <: S.TyDouble then pure $ core C.TyDouble
-  else if t1 <: S.TyString && t2 <: S.TyString then pure $ core C.TyString
-  else if t1 <: S.TyBool && t2 <: S.TyBool then pure $ core C.TyBool
+  t1 <: S.TyInt <&&> t2 <: S.TyInt >>= if _ then pure $ core C.TyInt
+  else t1 <: S.TyDouble <&&> t2 <: S.TyDouble >>= if _ then pure $ core C.TyDouble
+  else t1 <: S.TyString <&&> t2 <: S.TyString >>= if _ then pure $ core C.TyString
+  else t1 <: S.TyBool <&&> t2 <: S.TyBool >>= if _ then pure $ core C.TyBool
   else throwTypeError $
     "CompOp is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary (Logic op) e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
   let core = C.TmBinary (Logic op) (C.TmAnno e1' C.TyBool) (C.TmAnno e2' C.TyBool) /\ S.TyBool
-  if t1 <: S.TyBool && t2 <: S.TyBool then pure core
+  t1 <: S.TyBool <&&> t2 <: S.TyBool >>= if _ then pure core
   else throwTypeError $
     "LogicOp is not defined between" <+> show t1 <+> "and" <+> show t2
 infer (S.TmBinary Append e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  if t1 <: S.TyString && t2 <: S.TyString then
+  t1 <: S.TyString <&&> t2 <: S.TyString >>= if _ then
     pure $ C.TmBinary Append (C.TmAnno e1' C.TyString)
                              (C.TmAnno e2' C.TyString) /\ S.TyString
   else case t1, t2 of
     S.TyArray t1', S.TyArray t2' ->
       let core el er ty = C.TmBinary Append el er /\ ty in
       if t1' === t2' then pure $ core e1' e2' t1
-      else if t2' <: t1' then do
+      else t2' <: t1' >>= if _ then do
         t' <- transform t1
         pure $ core e1' (C.TmAnno e2' t') t1
-      else if t1' <: t2' then do
+      else t1' <: t2' >>= if _ then do
         t' <- transform t2
         pure $ core (C.TmAnno e1' t') e2' t2
       else throwTypeError $
@@ -101,7 +102,8 @@ infer (S.TmBinary Append e1 e2) = do
 infer (S.TmBinary Index e1 e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  case t1 of S.TyArray t1' | t2 <: S.TyInt ->
+  isInt <- t2 <: S.TyInt
+  case t1 of S.TyArray t1' | isInt ->
                pure $ C.TmBinary Index e1' (C.TmAnno e2' C.TyInt) /\ t1'
              _ -> throwTypeError $ "Index is not defined between" <+>
                                    show t1 <+> "and" <+> show t2
@@ -109,23 +111,25 @@ infer (S.TmBinary Index e1 e2) = do
 infer (S.TmBinary Coalesce (S.TmPrj e1 label) e2) = do
   e1' /\ t1 <- infer e1
   e2' /\ t2 <- infer e2
-  case selectLabel t1 label true of
-    Just t | t2 <: t -> do
-      t' <- transform t
-      pure $ C.TmBinary Coalesce (C.TmPrj e1' label) (C.TmAnno e2' t') /\ t
-    _ -> throwTypeError $
-      label <> "'s default value does not match its interface"
+  selectLabel t1 label true >>= case _ of
+    Just t ->
+      t2 <: t >>= if _ then do
+        t' <- transform t
+        pure $ C.TmBinary Coalesce (C.TmPrj e1' label) (C.TmAnno e2' t') /\ t
+      else err
+    _ -> err
+  where err = throwTypeError $ label <> "'s default value does not match its interface"
 infer (S.TmIf e1 e2 e3) = do
   e1' /\ t1 <- infer e1
-  if t1 <: S.TyBool then do
+  t1 <: S.TyBool >>= if _ then do
     e2' /\ t2 <- infer e2
     e3' /\ t3 <- infer e3
     let core et ef ty = C.TmIf (C.TmAnno e1' C.TyBool) et ef /\ ty
     if t2 === t3 then pure $ core e2' e3' t2
-    else if t3 <: t2 then do
+    else t3 <: t2 >>= if _ then do
       t' <- transform t2
       pure $ core e2' (C.TmAnno e3' t') t2
-    else if t2 <: t3 then do
+    else t2 <: t3 >>= if _ then do
       t' <- transform t3
       pure $ core (C.TmAnno e2' t') e3' t3
     else throwTypeError $
@@ -153,7 +157,7 @@ infer (S.TmAbs (S.WildCard _ : Nil) _) = throwTypeError $
 infer (S.TmAnno e ta) = do
   e' /\ t <- infer e
   t' /\ ta' <- transform' ta
-  if t <: ta' then pure $ C.TmAnno e' t' /\ ta'
+  t <: ta' >>= if _ then pure $ C.TmAnno e' t' /\ ta'
   else throwTypeError $
     "annotated" <+> show ta <+> "is not a supertype of inferred" <+> show t
 infer (S.TmMerge S.Neutral e1 e2) = do
@@ -182,7 +186,7 @@ infer (S.TmPrj e l) = do
   t' <- transform t
   let r /\ tr = case t of S.TyRec _ _ -> C.TmUnfold t' e' /\ S.unfold t
                           _ -> e' /\ t
-  case selectLabel tr l false of
+  selectLabel tr l false >>= case _ of
     Just tl -> pure $ C.TmPrj r l /\ tl
     _ -> throwTypeError $ "label" <+> show l <+> "is absent in" <+> show t
 infer (S.TmTApp e ta) = do
@@ -201,11 +205,12 @@ infer (S.TmLet x Nil Nil e1 e2) = do
 infer (S.TmLetrec x Nil Nil t e1 e2) = do
   e1' /\ t' /\ t1 <- inferRec x e1 t
   letIn x (C.TmFix x e1' t1) t' $ addTmBind x t' $ infer e2
--- TODO: find a more efficient algorithm
 infer (S.TmOpen e1 e2) = do
   e1' /\ t1 <- infer e1
-  let ls = foldr (\l s -> (l /\ unsafeFromJust (selectLabel t1 l false)) : s)
-           Nil (collectLabels t1)
+  -- TODO: is this correct?
+  ls :: List (Label /\ S.Ty) <- Map.toUnfoldable <$> selectLabelsWhere (\(_ /\ opt) -> not opt) t1
+  -- let ls = foldr (\l s -> (l /\ unsafeFromJust (selectLabel t1 l false)) : s)
+          --  Nil (collectLabels t1)
   let ty = foldr (uncurry addTmBind) (infer e2) ls
   letIn opened e1' t1 $
     foldr (\(l /\ t) -> letIn l (C.TmPrj (C.TmVar opened) l) t) ty ls
@@ -217,7 +222,7 @@ infer (S.TmUpdate rcd fields) = do
     t'' <- transform t'
     pure $ C.TmRcd l t'' e' /\ t'
   let t' = S.TyRcd $ rcdTy <$> fields'
-  if t <: t' then do
+  t <: t' >>= if _ then do
     d <- tyDiff t t'
     d' <- transform d
     let merge = if isTopLike d then identity else C.TmMerge (C.TmAnno rcd' d')
@@ -230,17 +235,16 @@ infer (S.TmUpdate rcd fields) = do
 infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
   t' <- expand t
   sig' <- expand sig
-  let e2 = inferFromSig sig' ne2
+  e2 <- inferFromSig sig' ne2
   (ret /\ tret) <- case me1 of
     Just e1 -> do
       -- self may be used in e1 (e.g. trait [self:T] inherits f self => ...)
       -- this self has nothing to do with that self in the super-trait
       e1' /\ t1 <- addTmBind self t' $ infer e1
       case t1 of
-        S.TyTrait ti to -> do
-          if t' <: ti then do
-            e2' /\ t2 <-
-              addTmBind self t' $ addTmBind "super" to $ infer e2
+        S.TyTrait ti to ->
+          t' <: ti >>= if _ then do
+            e2' /\ t2 <- addTmBind self t' $ addTmBind "super" to $ infer e2
             let to' = override to e2
             disjoint to' t2
             let tret = S.TyAnd to' t2
@@ -251,35 +255,40 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
             "is not a subtype of inherited self-type" <+> show ti
         _ -> throwTypeError $ "expected to inherit a trait, but got" <+> show t1
     Nothing -> addTmBind self t' $ infer e2
-  if tret <: sig' then trait self ret t' tret
-  else if structuralize tret <: structuralize sig' then do
-    -- traceM $ show (structuralize tret) <+> "-" <+> show (structuralize sig') <+> "="
-    tExtra <- tyDiff (structuralize tret) (structuralize sig')
-    -- traceM $ show tExtra
-    trait self ret t' $ if tExtra == S.TyTop then sig' else S.TyAnd sig' tExtra
-  else throwTypeError $ "the trait does not implement" <+> show sig <+>
-    "because the following subtyping does not hold:\n" <> showSubtypeTrace tret sig'
+  tret <: sig' >>= if _ then trait self ret t' tret
+  else do
+    stret <- structuralize tret
+    ssig' <- structuralize sig'
+    stret <: ssig' >>= if _ then do
+      -- traceM $ show (structuralize tret) <+> "-" <+> show (structuralize sig') <+> "="
+      tExtra <- tyDiff stret ssig'
+      -- traceM $ show tExtra
+      trait self ret t' $ if tExtra == S.TyTop then sig' else S.TyAnd sig' tExtra
+    else do
+      tr <- getSubtypeTrace tret sig'
+      throwTypeError $ "the trait does not implement" <+> show sig <+>
+        "because the following subtyping does not hold:\n" <> tr
   where
     -- TODO: inference is not complete
-    inferFromSig :: S.Ty -> S.Tm -> S.Tm
+    inferFromSig :: S.Ty -> S.Tm -> Typing S.Tm
     inferFromSig rs@(S.TyAnd _ _) e = inferFromSig (S.TyRcd $ combineRcd rs) e
-    inferFromSig s@(S.TyRec _ ty) e = S.TmFold s (inferFromSig ty e)
-    inferFromSig s (S.TmPos p e) = S.TmPos p (inferFromSig s e)
-    inferFromSig s (S.TmOpen e1 e2) = S.TmOpen e1 (inferFromSig s e2)
+    inferFromSig s@(S.TyRec _ ty) e = S.TmFold s <$> inferFromSig ty e
+    inferFromSig s (S.TmPos p e) = S.TmPos p <$> inferFromSig s e
+    inferFromSig s (S.TmOpen e1 e2) = S.TmOpen e1 <$> inferFromSig s e2
     inferFromSig s (S.TmMerge bias e1 e2) =
-      S.TmMerge bias (inferFromSig s e1) (inferFromSig s e2)
+      S.TmMerge bias <$> inferFromSig s e1 <*> inferFromSig s e2
     inferFromSig (S.TyRcd xs) r@(S.TmRcd (S.RcdField o l Nil (Left e) : Nil)) =
       case last $ filterRcd (_ == l) xs of
-        Just (S.RcdTy _ ty _) ->
-          S.TmRcd (singleton (S.RcdField o l Nil (Left (inferFromSig ty e))))
-        _ -> r
+        Just (S.RcdTy _ ty _) -> S.TmRcd <$> singleton <$>
+          S.RcdField o l Nil <$> Left <$> inferFromSig ty e
+        _ -> pure r
     inferFromSig (S.TyRcd xs)
         (S.TmRcd (S.DefaultPattern pat@(S.MethodPattern _ label _ _) : Nil)) =
-      desugar $ S.TmRcd $ filterRcd (_ `notElem` patterns label) xs <#>
-        \(S.RcdTy l ty _) ->
+      desugar <$> S.TmRcd <$> for (filterRcd (_ `notElem` patterns label) xs)
+        \(S.RcdTy l ty _) -> do
           let params /\ ty' = paramsAndInnerTy ty
-              e = inferFromSig ty' (desugar (deMP pat)) in
-          S.RcdField false l params (Left e)
+          e <- inferFromSig ty' (desugar (deMP pat))
+          pure $ S.RcdField false l params (Left e)
       where patterns :: Label -> Array Label
             patterns l = patternsFromRcd (S.TmMerge S.Neutral (fromMaybe S.TmUnit me1) ne2) l
             patternsFromRcd :: S.Tm -> Label -> Array Label
@@ -303,12 +312,12 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
               (S.TmParam "_" (Just targ) : params) /\ ty
             paramsAndInnerTy ty = Nil /\ ty
     inferFromSig (S.TyArrow targ tret) (S.TmAbs (S.TmParam x mt : Nil) e) =
-      S.TmAbs (singleton (S.TmParam x (mt <|> Just targ))) (inferFromSig tret e)
+      S.TmAbs (singleton (S.TmParam x (mt <|> Just targ))) <$> inferFromSig tret e
     inferFromSig (S.TyArrow targ tret) (S.TmAbs (S.WildCard defaults : Nil) e)
       -- TODO: better error messages for mismatch
       | defaults `matchOptional` targ =
         S.TmAbs (singleton (S.TmParam wildcardName (Just targ)))
-                (open defaults (S.TmOpen wildcardVar (inferFromSig tret e)))
+                <$> open defaults <$> S.TmOpen wildcardVar <$> inferFromSig tret e
       where wildcardName = "#wildcard"
             wildcardVar = S.TmVar wildcardName
             open fields body = foldr letFieldIn body fields
@@ -317,12 +326,12 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
     inferFromSig (S.TyTrait ti to) (S.TmTrait (Just (self' /\ mt)) sig' e1 e2) =
       let t' = fromMaybe ti mt in
       S.TmTrait (Just (self' /\ Just t')) sig'
-                (inferFromSig to <$> e1) (inferFromSig to e2)
+                <$> traverse (inferFromSig to) e1 <*> inferFromSig to e2
     inferFromSig (S.TyForall a td ty) (S.TmTAbs ((a' /\ td') : Nil) e) =
-      S.TmTAbs (singleton (a' /\ (td' <|> Just td))) (inferFromSig ty' e)
+      S.TmTAbs (singleton (a' /\ (td' <|> Just td))) <$> inferFromSig ty' e
       where ty' = identity $ S.tySubst a (S.TyVar a') ty
-    inferFromSig t'@(S.TyNominal _ _) e = inferFromSig (structuralize t') e
-    inferFromSig _ e = e
+    inferFromSig t'@(S.TyNominal _ _) e = structuralize t' >>= flip inferFromSig e
+    inferFromSig _ e = pure e
     combineRcd :: S.Ty -> S.RcdTyList
     combineRcd (S.TyAnd (S.TyRcd xs) (S.TyRcd ys)) = xs <> ys
     combineRcd (S.TyAnd l (S.TyRcd ys)) = combineRcd l <> ys
@@ -366,7 +375,7 @@ infer (S.TmNew e) = do
   e' /\ t <- infer e
   case t of
     S.TyTrait ti to ->
-      if to <: ti then do
+      to <: ti >>= if _ then do
         to' <- transform to
         pure $ C.TmFix "#self" (C.TmApp e' (C.TmVar "#self") true) to' /\ to
       else throwTypeError $ "input type is not a supertype of output type in" <+>
@@ -377,7 +386,7 @@ infer (S.TmForward e1 e2) = do
   e2' /\ t2 <- infer e2
   case t1 of
     S.TyTrait ti to ->
-      if t2 <: ti then pure $ C.TmApp e1' e2' true /\ to
+      t2 <: ti >>= if _ then pure $ C.TmApp e1' e2' true /\ to
       else throwTypeError $ "expected to forward to a subtype of" <+> show ti <>
                             ", but got" <+> show t2
     _ -> throwTypeError $ "expected to forward from a trait, but got" <+> show t1
@@ -401,8 +410,9 @@ infer (S.TmExclude e te) = do
       d' <- transform d
       pure $ C.TmAnno e' d' /\ d
   where checkLabel :: Label -> S.Ty -> Typing Unit
-        checkLabel l t = if l `member` collectLabels t then pure unit
-                         else throwTypeError $ "label" <+> show l <+> "is absent in" <+> show e
+        checkLabel l t = collectLabels t >>= \ls ->
+          if l `member` ls then pure unit
+          else throwTypeError $ "label" <+> show l <+> "is absent in" <+> show e
 infer (S.TmRemoval e l) = do
   infer $ S.TmExclude e (S.TyRcd (singleton (S.RcdTy l S.TyBot false)))
 infer (S.TmDiff e1 e2) = do
@@ -421,7 +431,7 @@ infer (S.TmRename e old new) = do
   _ /\ t <- infer e
   case t of
     S.TyTrait ti _ ->
-      case selectLabel ti old false of
+      selectLabel ti old false >>= case _ of
         Just tl -> do
           -- e [old <- new] := trait [self] =>
           --   let super = self [new <- old] in
@@ -444,13 +454,13 @@ infer (S.TmFold t e) = do
   t' /\ tr <- transform' t
   ensureTyRec tr
   e' /\ t'' <- infer e
-  if t'' <: S.unfold tr then pure $ C.TmFold t' e' /\ tr
+  t'' <: S.unfold tr >>= if _ then pure $ C.TmFold t' e' /\ tr
   else throwTypeError $ "cannot fold" <+> show e <+> "to" <+> show t
 infer (S.TmUnfold t e) = do
   t' /\ tr <- transform' t
   ensureTyRec tr
   e' /\ t'' <- infer e
-  if t'' <: tr then pure $ C.TmUnfold t' e' /\ S.unfold tr
+  t'' <: tr >>= if _ then pure $ C.TmUnfold t' e' /\ S.unfold tr
   else throwTypeError $ "cannot unfold" <+> show e <+> "to" <+> show t
 infer (S.TmToString e) = do
   e' /\ t <- infer e
@@ -481,15 +491,16 @@ inferRec :: Name -> S.Tm -> S.Ty -> Typing (C.Tm /\ S.Ty /\ C.Ty)
 inferRec x e t = do
   t'' /\ t' <- transform' t
   e' /\ t1 <- addTmBind x t' $ infer e
-  if t1 <: t' then pure $ (if t1 === t' then e' else C.TmAnno e' t'') /\ t' /\ t''
+  t1 <: t' >>= if _ then pure $ (if t1 === t' then e' else C.TmAnno e' t'') /\ t' /\ t''
   else throwTypeError $
     "annotated" <+> show t <+> "is not a supertype of inferred" <+> show t1
 
 distApp :: S.Ty -> Either S.Ty S.Ty -> Typing S.Ty
-distApp (S.TyArrow targ tret) (Left t) | t <: targ = pure tret
-                                       | otherwise = throwTypeError $
-  "expected the argument type to be a subtype of the parameter type, but\n" <>
-    showSubtypeTrace t targ
+distApp (S.TyArrow targ tret) (Left t) =
+  t <: targ >>= if _ then pure tret
+  else do
+    tr <- getSubtypeTrace t targ
+    throwTypeError $ "expected the argument type to be a subtype of the parameter type, but\n" <> tr
 distApp (S.TyForall a td t) (Right ta) = disjoint ta td $> S.tySubst a ta t
 distApp (S.TyAnd t1 t2) t = do
   t1' <- distApp t1 t
@@ -520,7 +531,7 @@ disjointVar :: Name -> S.Ty -> Typing Unit
 disjointVar a t = do
   mt' <- lookupTyBind a
   case mt' of
-    Just t' -> if t' <: t then pure unit else throwTypeError $
+    Just t' -> t' <: t >>= if _ then pure unit else throwTypeError $
       "type variable" <+> show a <+> "is not disjoint from" <+> show t
     _ -> do
       tyAliasEnv <- asks (_.tyAliasEnv)
@@ -551,24 +562,28 @@ ensureTyRec :: S.Ty -> Typing Unit
 ensureTyRec (S.TyRec _ _) = pure unit
 ensureTyRec t = throwTypeError $ "fold/unfold expected a recursive type, but got" <+> show t
 
-collectLabels :: S.Ty -> Set Label
-collectLabels (S.TyAnd t1 t2) = Set.union (collectLabels t1) (collectLabels t2)
-collectLabels (S.TyRcd rts) = Set.fromFoldable $ (\(S.RcdTy l _ _) -> l) <$>
-  filter (\(S.RcdTy _ _ opt) -> not opt) rts
-collectLabels t@(S.TyNominal _ _) = collectLabels (structuralize t)
-collectLabels _ = Set.empty
+selectLabelsWhere :: (Label /\ Boolean -> Boolean) -> S.Ty -> Typing (Map Label S.Ty)
+selectLabelsWhere p (S.TyAnd t1 t2) = merge <$> selectLabelsWhere p t1 <*> selectLabelsWhere p t2
+  where
+    merge :: Map Label S.Ty -> Map Label S.Ty -> Map Label S.Ty
+    merge m1 m2 = Map.fromFoldable $ (\l -> l /\
+      case lookup l m1, lookup l m2 of
+        Just tl, Just tr -> S.TyAnd tl tr
+        Just t, Nothing -> t
+        Nothing, Just t -> t
+        _, _ -> S.TyBot) <$> ls
+      where ls :: List Label
+            ls = Set.toUnfoldable $ union (keys m1) (keys m2)
+selectLabelsWhere p (S.TyRcd rts) = pure $ Map.fromFoldable $
+  (\(S.RcdTy l t _) -> l /\ t) <$> filter (\(S.RcdTy l _ opt) -> p (l /\ opt)) rts
+selectLabelsWhere p t@(S.TyNominal _ _) = structuralize t >>= selectLabelsWhere p
+selectLabelsWhere _ _ = pure Map.empty
 
-selectLabel :: S.Ty -> Label -> Boolean -> Maybe S.Ty
-selectLabel (S.TyAnd t1 t2) l opt =
-  case selectLabel t1 l opt, selectLabel t2 l opt of
-    Just t1', Just t2' -> Just (S.TyAnd t1' t2')
-    Just t1', Nothing  -> Just t1'
-    Nothing,  Just t2' -> Just t2'
-    Nothing,  Nothing  -> Nothing
-selectLabel (S.TyRcd rts) l opt = (\(S.RcdTy _ t _) -> t) <$>
-  find (\(S.RcdTy l' _ opt') -> l' == l && opt' == opt) rts
-selectLabel t@(S.TyNominal _ _) l opt = selectLabel (structuralize t) l opt
-selectLabel _ _ _ = Nothing
+collectLabels :: S.Ty -> Typing (Set Label)
+collectLabels t = keys <$> selectLabelsWhere (\(_ /\ opt) -> not opt) t
+
+selectLabel :: S.Ty -> Label -> Boolean -> Typing (Maybe S.Ty)
+selectLabel t l opt = lookup l <$> selectLabelsWhere (\(l' /\ opt') -> l' == l && opt' == opt) t
 
 checkDef :: Def -> Checking Unit
 checkDef (TyDef isRec a sorts params t) = do
@@ -594,20 +609,24 @@ checkDef (ItDef a params supers fs) = do
   ctx <- gets fromState
   case runTyping resolver ctx of
     Left err -> throwError err
-    Right t -> modify_ (\b -> b { tyAliases = insert a t b.tyAliases })
+    Right (t1 /\ t2) ->
+      modify_ (\st -> st { tyAliases = insert a t1 st.tyAliases
+                         , tyConstrs = insert a t2 st.tyConstrs })
   where
-    resolver :: Typing Ty
+    resolver :: Typing (Ty /\ (List Ty /\ Ty))
     resolver = do
       let params' = (\x -> x /\ S.TyTop) <$> params
-      supers' <- addTyBinds params' $ traverse checkSuper supers
-      rcd <- addTyBinds params' $ expand $ S.TyRcd fs
-      if supers' == Nil then pure unit else
-        addTyBinds params' $ disjoint (structuralize $ foldl1 S.TyAnd supers') rcd
-      let constr = S.TyConstr a supers' rcd
-      let nominal = S.TyNominal constr $ (\x -> x /\ S.TyVar x) <$> params
-      pure $ foldr S.TyAbs nominal (fst <$> params')
-    addTyBinds :: forall a. List (Name /\ Ty) -> Typing a -> Typing a
-    addTyBinds binds typing = foldr (uncurry addTyBind) typing binds
+      let tNominal = S.TyNominal a $ (\x -> x /\ S.TyVar x) <$> params
+      let tConstr = foldr S.TyAbs tNominal (fst <$> params')
+      supers' <- withCtx tConstr params' $ traverse checkSuper supers
+      rcd <- withCtx tConstr params' $ expand $ S.TyRcd fs
+      if supers' == Nil then pure unit
+      else do
+        ss <- structuralize $ foldl1 S.TyAnd supers'
+        withCtx tConstr params' $ disjoint ss rcd
+      pure $ tConstr /\ (supers' /\ rcd)
+    withCtx :: forall a. Ty -> List (Name /\ Ty) -> Typing a -> Typing a
+    withCtx t binds typing = foldr (uncurry addTyBind) (addTyAlias a t typing) binds
     checkSuper :: Ty -> Typing Ty
     checkSuper t = do
       t' <- expand t

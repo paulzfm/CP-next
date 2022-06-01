@@ -18,7 +18,7 @@ import Language.CP.Semantics.NaturalClosure as Closure
 import Language.CP.Semantics.NaturalSubst as BigStep
 import Language.CP.Semantics.StepTrace as StepTrace
 import Language.CP.Semantics.Subst as SmallStep
-import Language.CP.Subtype.Source (showSubtypeTrace)
+import Language.CP.Subtype.Source (getSubtypeTrace)
 import Language.CP.Syntax.Source (Prog(..), Tm, showDoc)
 import Language.CP.Transform (expand, transform')
 import Language.CP.Typing (checkProg, infer)
@@ -45,7 +45,7 @@ judgeSubtype judgment = case runParser judgment (whiteSpace *> subtypeJudgment <
   Right (t1 /\ t2) -> do
     t1' <- expand t1
     t2' <- expand t2
-    pure $ showSubtypeTrace t1' t2'
+    getSubtypeTrace t1' t2'
 
 importDefs :: String -> Checking Unit
 importDefs code = case runParser code (whiteSpace *> program <* eof) of

@@ -32,3 +32,8 @@ isCapitalized = isUpper <<< unsafeFromJust <<< codePointAt 0
 
 zipWithIndex :: forall a. List a -> List (a /\ Int)
 zipWithIndex xs = zip xs $ 0 .. (length xs - 1)
+
+andM :: forall m. Bind m => m Boolean -> m Boolean -> m Boolean
+andM ma mb = (&&) <$> ma <*> mb
+
+infixl 3 andM as <&&>
