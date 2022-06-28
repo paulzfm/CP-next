@@ -22,7 +22,7 @@ import Language.CP.Desugar (deMP, desugar)
 import Language.CP.Subtype.Source (isTopLike, showSubtypeTrace, structuralize, tyDiff, tyRcd, (<:), (===))
 import Language.CP.Syntax.Common (BinOp(..), Label, Name, UnOp(..))
 import Language.CP.Syntax.Core as C
-import Language.CP.Syntax.Source (Def(..), Prog(..), Ty(..), intercalate')
+import Language.CP.Syntax.Source (Def(..), Kind(..), Prog(..), Ty(..), intercalate', properTy)
 import Language.CP.Syntax.Source as S
 import Language.CP.Transform (expand, transform, transform', transformTyDef)
 import Language.CP.Util (foldl1, foldr1, unsafeFromJust, (<+>))
@@ -190,7 +190,7 @@ infer (S.TmTApp e ta) = do
   t' /\ ta' <- transform' ta
   t <- distApp tf (Right ta')
   pure $ C.TmTApp e' t' /\ t 
-infer (S.TmTAbs ((a /\ Just td) : Nil) e) = do
+infer (S.TmTAbs ((a /\ KindStar td) : Nil) e) = do
   t1 /\ td' <- transform' td
   e' /\ t <- addTyBind a td' $ infer e
   t2 <- addTyBind a td' $ transform t
@@ -319,7 +319,7 @@ infer (S.TmTrait (Just (self /\ Just t)) (Just sig) me1 ne2) = do
       S.TmTrait (Just (self' /\ Just t')) sig'
                 (inferFromSig to <$> e1) (inferFromSig to e2)
     inferFromSig (S.TyForall a td ty) (S.TmTAbs ((a' /\ td') : Nil) e) =
-      S.TmTAbs (singleton (a' /\ (td' <|> Just td))) (inferFromSig ty' e)
+      S.TmTAbs (singleton (a' /\ td')) (inferFromSig ty' e)
       where ty' = identity $ S.tySubst a (S.TyVar a') ty
     inferFromSig t'@(S.TyNominal _ _) e = inferFromSig (structuralize t') e
     inferFromSig _ e = e
@@ -584,7 +584,7 @@ checkDef (TyDef isRec a sorts params t) = do
     addTyBinds :: forall a. Typing a -> Typing a
     addTyBinds typing = foldr (flip addTyBind S.TyTop) typing params
     sig :: S.Ty -> S.Ty
-    sig t' = foldr (uncurry S.TySig) (foldr S.TyAbs t' params) dualSorts
+    sig t' = foldr (uncurry S.TySig) (foldr (\a -> S.TyAbs a properTy) t' params) dualSorts
     addRec :: forall a. Typing a -> Typing a
     addRec = if isRec then addTyBind a S.TyTop else identity
     rec :: S.Ty -> S.Ty
@@ -604,7 +604,7 @@ checkDef (ItDef a params supers fs) = do
         addTyBinds params' $ disjoint (structuralize $ foldl1 S.TyAnd supers') rcd
       let constr = S.TyConstr a supers' rcd
       let nominal = S.TyNominal constr $ (\x -> x /\ S.TyVar x) <$> params
-      pure $ foldr S.TyAbs nominal (fst <$> params')
+      pure $ foldr (\a -> S.TyAbs a properTy) nominal (fst <$> params')
     addTyBinds :: forall a. List (Name /\ Ty) -> Typing a -> Typing a
     addTyBinds binds typing = foldr (uncurry addTyBind) typing binds
     checkSuper :: Ty -> Typing Ty

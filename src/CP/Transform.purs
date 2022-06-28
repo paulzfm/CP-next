@@ -46,7 +46,7 @@ translate (S.TyRec a t) = C.TyRec a <$> translate t
 translate (S.TyTrait ti to) = C.TyArrow <$> translate ti <*> translate to <@> true
 translate (S.TyArray t) = C.TyArray <$> translate t
 translate t@(S.TyNominal _ _) = translate (structuralize t)
-translate t@(S.TyAbs _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
+translate t@(S.TyAbs _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t@(S.TySig _ _ _) = throwTypeError $ "expected a proper type, but got" <+> show t
 translate t = throwTypeError $ "expected an expanded type, but got" <+> show t
 
@@ -80,7 +80,7 @@ expand (S.TyApp t1 t2) = do
   t1' <- expand t1
   t2' <- expand t2
   case t1' of
-    S.TyAbs a t -> pure $ S.tySubst a t2' t
+    S.TyAbs a _ t -> pure $ S.tySubst a t2' t
     S.TySig a b t ->
       case t2' of
         S.TySort ti (Just to) -> do
@@ -89,7 +89,7 @@ expand (S.TyApp t1 t2) = do
           pure $ S.tySubst b to (S.tySubst a ti t)
         _ -> throwTypeError $ "sig instantiation expected a sort, but got" <+> show t2
     _ -> throwTypeError $  "expected an applicable type, but got" <+> show t1
-expand (S.TyAbs a t) = addTyBind a someTy $ S.TyAbs a <$> expand t
+expand (S.TyAbs a k t) = addTyBind a someTy $ S.TyAbs a k <$> expand t
 expand (S.TyTrait ti to) = S.TyTrait <$> expand ti <*> expand to
 expand (S.TySort ti to) = do
   ti' <- expand ti
@@ -131,7 +131,7 @@ distinguish isCtor isOut (S.TyRec a t) = S.TyRec a <$> distinguish isCtor isOut 
 distinguish isCtor isOut (S.TyApp t1 t2) =
   S.TyApp <$> distinguish isCtor isOut t1 <*> distinguish isCtor isOut t2
 -- TODO: remove bound variable names from SortEnv
-distinguish isCtor isOut (S.TyAbs a t) = S.TyAbs a <$> distinguish isCtor isOut t
+distinguish isCtor isOut (S.TyAbs a k t) = S.TyAbs a k <$> distinguish isCtor isOut t
 distinguish isCtor isOut (S.TyTrait ti to) = S.TyTrait <$>
   distinguish isCtor (not isOut) ti <*> distinguish isCtor isOut to
 distinguish isCtor isOut (S.TyArray t) = S.TyArray <$> distinguish isCtor isOut t

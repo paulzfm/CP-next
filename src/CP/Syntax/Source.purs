@@ -13,7 +13,7 @@ import Language.CP.Syntax.Common (BinOp, Label, Name, UnOp, angles, braces, brac
 import Language.CP.Util (isCapitalized, (<+>))
 import Parsing (Position)
 
--- Types --
+-- Types and Kinds --
 
 data Ty = TyInt
         | TyDouble
@@ -28,7 +28,7 @@ data Ty = TyInt
         | TyForall Name Ty Ty
         | TyRec Name Ty
         | TyApp Ty Ty
-        | TyAbs Name Ty
+        | TyAbs Name Kind Ty
         | TyTrait Ty Ty
         | TySort Ty (Maybe Ty)
         | TySig Name Name Ty
@@ -50,7 +50,7 @@ instance Show Ty where
   show (TyForall x s t) = "∀" <+> x <+> "*" <+> show s <> "." <+> show t
   show (TyRec a t) = parens $ "mu" <+> a <> "." <+> show t
   show (TyApp t1 t2) = parens $ show t1 <+> show t2
-  show (TyAbs a t) = parens $ "\\" <> a <+> "->" <+> show t
+  show (TyAbs a k t) = parens $ "\\" <> a <+> "->" <+> show t
   show (TyTrait ti to) = "Trait" <> angles (show ti <+> "=>" <+> show to)
   show (TySort ti to) = angles $ show ti <> showMaybe " => " to ""
   show (TySig a b t) = -- \<a, b> accepts an expanded form of original <I => O>
@@ -62,8 +62,20 @@ instance Show Ty where
 
 data TyConstr = TyConstr Name (List Ty) Ty -- interfaceName supers recordType
 
+data Kind = KindStar Ty
+          | KindArrow Kind Kind
+
+instance Show Kind where
+  show (KindStar TyTop) = "_"
+  show (KindStar t) = "_ *" <+> show t
+  show (KindArrow k1 k2) = show k1 <+> "=>" <+> show k2
+
+properTy :: Kind
+properTy = KindStar TyTop
+
 derive instance Eq TyConstr
 derive instance Eq Ty
+derive instance Eq Kind
 
 -- Terms --
 
@@ -217,7 +229,7 @@ tySubst a s (TyForall x tx t) = TyForall x (tySubst a s tx)
   (if a == x then t else tySubst a s t)
 tySubst a s (TyRec a' t) = TyRec a' (if a == a' then t else tySubst a s t)
 tySubst a s (TyApp t1 t2) = TyApp (tySubst a s t1) (tySubst a s t2)
-tySubst a s (TyAbs a' t) = TyAbs a' (if a == a' then t else tySubst a s t)
+tySubst a s (TyAbs a' k t) = TyAbs a' k (if a == a' then t else tySubst a s t)
 tySubst a s (TyTrait ti to) = TyTrait (tySubst a s ti) (tySubst a s to)
 tySubst a s (TySort ti to) = TySort (tySubst a s ti) (tySubst a s <$> to)
 tySubst a s (TySig a' b' t) = TySig a' b'
@@ -240,11 +252,11 @@ showMaybe :: forall a. Show a => String -> Maybe a -> String -> String
 showMaybe l m r = maybe "" (\x -> l <> show x <> r) m
 
 type TyParamList = List TyParam
-type TyParam = Name /\ Maybe Ty
+type TyParam = Name /\ Kind
 
 showTyParams :: TyParamList -> String
 showTyParams params = intercalate' " " $ params <#> \param ->
-  maybe (fst param) (\t -> parens $ fst param <+> "*" <+> show t) (snd param)
+  parens $ fst param <+> ":" <+> show (snd param)
 
 type TmParamList = List TmParam
 data TmParam = TmParam Name (Maybe Ty)

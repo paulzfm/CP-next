@@ -7,16 +7,14 @@ import Data.Either (Either(..), either)
 import Data.List (List(..), foldr, singleton)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Tuple.Nested ((/\))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), Tm(..), TmParam(..), Ty(..), TyParamList, TmParamList)
+import Language.CP.Syntax.Source (Bias(..), Def(..), Kind(..), MethodPattern(..), Prog(..), RcdField(..), Tm(..), TmParam(..), TmParamList, Ty(..), TyParamList)
 import Language.CP.Util (foldl1)
 
 -- typing-related desugaring is delayed until type inference
 desugar :: Tm -> Tm
 
 desugar (TmAbs xs e) = foldr (\x s -> TmAbs (singleton x) s) (desugar e) xs
-desugar (TmTAbs xs e) =
-  foldr (\x s -> TmTAbs (singleton (rmap disjointness x)) s) (desugar e) xs
-  where disjointness t = Just (fromMaybe TyTop t)
+desugar (TmTAbs xs e) = foldr (\x s -> TmTAbs (singleton x) s) (desugar e) xs
 desugar (TmRcd Nil) = TmUnit
 desugar (TmRcd xs) =
   foldl1 (TmMerge Neutral) (xs <#> \x -> TmRcd (singleton (desugarField x)))
@@ -78,11 +76,11 @@ desugarProg (Prog defs e) = Prog (map desugarDef defs) (desugar e)
 
 -- helper
 funTypeOf :: TyParamList -> TmParamList -> Ty -> Ty
-funTypeOf tyParams tmParams t = foldr (\(x /\ mt) -> \acc -> TyForall x (get mt) acc)
+funTypeOf tyParams tmParams t = foldr (\(x /\ k) -> \acc -> TyForall x (get k) acc)
   (foldr TyArrow t (tyOf <$> tmParams)) tyParams
   where
-    get = case _ of Just x -> x
-                    Nothing -> TyTop
+    get = case _ of KindStar x -> x
+                    _ -> TyTop -- FIXME: TyForall Name Kind
     tyOf = case _ of TmParam _ (Just ty) -> ty
                      TmParam _ Nothing -> TyBot
                      WildCard _ -> TyBot

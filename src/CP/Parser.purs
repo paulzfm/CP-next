@@ -8,7 +8,7 @@ import Data.Array as Array
 import Data.CodePoint.Unicode (isLower)
 import Data.Either (Either(..))
 import Data.Identity (Identity)
-import Data.List (List(..), foldl, many, null, some, toUnfoldable)
+import Data.List (List(..), foldl, foldr, many, null, some, toUnfoldable)
 import Data.List.NonEmpty (toList)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, optional)
 import Data.String (codePointFromChar)
@@ -16,7 +16,7 @@ import Data.String.CodeUnits as SCU
 import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested (type (/\), (/\))
 import Language.CP.Syntax.Common (ArithOp(..), BinOp(..), CompOp(..), LogicOp(..), UnOp(..))
-import Language.CP.Syntax.Source (Bias(..), Def(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), RcdTyList, SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam)
+import Language.CP.Syntax.Source (Bias(..), Def(..), Kind(..), MethodPattern(..), Prog(..), RcdField(..), RcdTy(..), RcdTyList, SelfAnno, Tm(..), TmParam(..), Ty(..), TyParam, properTy)
 import Language.CP.Util (foldl1, isCapitalized)
 import Parsing (Parser, fail, position)
 import Parsing.Combinators (between, choice, endBy, lookAhead, manyTill, option, sepEndBy, sepEndBy1, try)
@@ -66,7 +66,7 @@ tmDef :: SParser Def
 tmDef = do
   d <- try do
     x <- lowerIdentifier
-    tys <- many $ try $ tyParams false
+    tys <- many $ try $ tyParam false
     tms <- many tmParams
     t <- optional (symbol ":" *> ty)
     symbol "="
@@ -144,7 +144,7 @@ lambdaAbs = do
 tyLambdaAbs :: SParser Tm
 tyLambdaAbs = do
   symbol "/\\"
-  xs <- some (tyParams true)
+  xs <- some (tyParam true)
   symbol "."
   e <- expr
   pure $ TmTAbs xs e
@@ -180,7 +180,7 @@ letIn :: SParser Tm
 letIn = do
   reserved "let"
   x <- lowerIdentifier
-  tys <- many $ try $ tyParams false
+  tys <- many $ try $ tyParam false
   tms <- many tmParams
   symbol "="
   e1 <- expr
@@ -192,7 +192,7 @@ letrec :: SParser Tm
 letrec = do
   reserved "letrec"
   x <- lowerIdentifier
-  tys <- many $ try $ tyParams false
+  tys <- many $ try $ tyParam false
   tms <- many tmParams
   symbol ":"
   t <- ty
@@ -346,7 +346,7 @@ ty = fix \t -> buildExprParser toperators $ cty t
 
 cty :: SParser Ty -> SParser Ty
 cty t = foldl TyApp <$> bty t <*> many (bty t) <|>
-        forallTy <|> traitTy
+        forallTy <|> traitTy <|> tyLambda
 
 bty :: SParser Ty -> SParser Ty
 bty t = foldl TyApp <$> aty t <*> many (sortTy t)
@@ -378,6 +378,14 @@ forallTy = do
   symbol "."
   t <- ty
   pure $ TyForall x s t
+
+tyLambda :: SParser Ty
+tyLambda = do
+  symbol "\\"
+  ps <- many $ tyParam false
+  symbol "->"
+  t <- ty
+  pure $ foldr (\(x /\ k) -> TyAbs x k) t ps
 
 traitTy :: SParser Ty
 traitTy = do
@@ -417,10 +425,15 @@ fromIntOrNumber (Right number) = TmDouble number
 tyArg :: SParser Ty
 tyArg = char '@' *> bty ty
 
-tyParams :: Boolean -> SParser TyParam
-tyParams us = Tuple <$> id <*> pure Nothing <|>
-              parens (Tuple <$> id <* symbol "*" <*> (Just <$> ty))
+tyParam :: Boolean -> SParser TyParam
+tyParam us = Tuple <$> id <*> pure properTy
+           <|> parens (Tuple <$> id <*> kindAnnot)
   where id = if us then underscore <|> upperIdentifier else upperIdentifier
+        kindAnnot = (symbol "*" *> (KindStar <$> ty)) <|> (symbol "::" *> kind ty)
+
+kind :: SParser Ty -> SParser Kind
+kind = \t -> buildExprParser [ [Infix (symbol "=>" $> KindArrow) AssocRight] ] $
+  KindStar <$> (symbol "_" *> ((symbol "*" *> t) <|> pure TyTop))
 
 tmParams :: SParser TmParam
 tmParams = choice [ parensNameColonType
